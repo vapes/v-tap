@@ -26,6 +26,9 @@ export class RoundManager {
   /** Persistent pot — accumulates across rounds until someone wins it */
   potValue = 0;
 
+  /** True when only the player is in the round (no bots bet) */
+  soloRound = false;
+
   cashouts: CashoutEntry[] = [];
 
   /** Whether the player chose to bet this round */
@@ -53,9 +56,10 @@ export class RoundManager {
   }
 
   startBetting() {
-    this.state          = GameState.BETTING;
-    this.playerInRound  = false;
+    this.state           = GameState.BETTING;
+    this.playerInRound   = false;
     this.playerCashedOut = false;
+    this.soloRound       = false;
   }
 
   /** Player taps BET during the betting window. Returns true if successful. */
@@ -74,6 +78,18 @@ export class RoundManager {
   /** A bot joins the round during betting. Call once per bot bet. */
   botJoinRound(_betAmount: number) {
     this.potValue += mathConfig.player.potContribution;
+  }
+
+  /**
+   * Called when the player is the only participant (no bots bet).
+   * Refunds pot contribution so payout = full bet × multiplier.
+   */
+  markSoloRound() {
+    this.soloRound = true;
+    if (this.playerInRound) {
+      this.potValue   -= mathConfig.player.potContribution;
+      this.playerWager = this.playerBet;
+    }
   }
 
   startRound() {
@@ -134,10 +150,12 @@ export class RoundManager {
 
   /** Award pot to winner; pot resets. Handles player rebuy if needed. */
   awardPot() {
-    if (this.lastWinner?.isPlayer) {
-      this.playerBalance += this.potValue;
+    if (!this.soloRound) {
+      if (this.lastWinner?.isPlayer) {
+        this.playerBalance += this.potValue;
+      }
+      this.potValue = 0;
     }
-    this.potValue = 0;
 
     if (this.playerBalance < mathConfig.player.rebuyThreshold) {
       this.playerBalance = mathConfig.player.rebuyAmount;
@@ -164,6 +182,7 @@ export class RoundManager {
     this.recentCrashes              = [];
     this.tableBet                   = 0;
     this.potValue                   = 0;
+    this.soloRound                  = false;
     this.playerPendingCashoutAmount = 0;
     this.playerBalance              = mathConfig.player.startingBalance;
   }

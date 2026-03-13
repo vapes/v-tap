@@ -293,6 +293,12 @@ export class GameScene {
     this.crashFlash.alpha = 0;
 
     const bots = this.botPlayers.getBots();
+
+    const anyBotBetting = bots.some(b => b.betCommitted);
+    if (this.roundManager.playerInRound && !anyBotBetting) {
+      this.roundManager.markSoloRound();
+      this.potDisplay.setPot(this.roundManager.potValue);
+    }
     for (let i = 0; i < bots.length; i++) {
       if (!bots[i].betCommitted) {
         this.playersPanel.updatePlayerStatus(i + 1, 'out');
@@ -343,26 +349,31 @@ export class GameScene {
       }
     }
 
-    const winner = this.roundManager.lastWinner;
-    if (winner) {
-      this.startCrashWinDisplay(winner.name, winner.cashoutAmount, this.roundManager.potValue, winner.isPlayer);
+    if (!this.roundManager.soloRound) {
+      const winner = this.roundManager.lastWinner;
+      if (winner) {
+        this.startCrashWinDisplay(winner.name, winner.cashoutAmount, this.roundManager.potValue, winner.isPlayer);
+      }
     }
 
     this.resultTimer = this.CRASH_DISPLAY;
   }
 
   private showRoundResult() {
-    const winner = this.roundManager.lastWinner;
-    const pot    = this.roundManager.potValue;
-
-    if (winner) {
-      if (!winner.isPlayer) {
-        this.botPlayers.awardPotToBot(winner.name, pot);
-      }
+    if (this.roundManager.soloRound) {
       this.roundManager.awardPot();
-      // Win display already started in onCrash — just continue
     } else {
-      this.showNobodyWon();
+      const winner = this.roundManager.lastWinner;
+      const pot    = this.roundManager.potValue;
+
+      if (winner) {
+        if (!winner.isPlayer) {
+          this.botPlayers.awardPotToBot(winner.name, pot);
+        }
+        this.roundManager.awardPot();
+      } else {
+        this.showNobodyWon();
+      }
     }
 
     // If player cashed out this round, fly their payout to the balance now
