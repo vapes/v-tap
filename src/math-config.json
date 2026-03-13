@@ -1,0 +1,47 @@
+{
+  "meta": {
+    "version": "2.0.0",
+    "rtp": 0.99,
+    "houseEdge": 0.01
+  },
+  "crash": {
+    "houseEdge": 0.01,
+    "minMultiplier": 1,
+    "maxMultiplier": 50
+  },
+  "growth": {
+    "rateMin": 0.15,
+    "rateMax": 0.275
+  },
+  "player": {
+    "startingBalance": 1000,
+    "tables": [5, 10, 20, 50],
+    "potContribution": 1,
+    "rebuyThreshold": 50,
+    "rebuyAmount": 1000
+  },
+  "timing": {
+    "bettingDelaySec": 10,
+    "resultDelaySec": 3,
+    "crashDisplaySec": 1.5
+  },
+  "bots": {
+    "betChance": 0.75,
+    "greedyChance": 0.15,
+    "greedyMultiplier": 1.5,
+    "rebuyThreshold": 50,
+    "rebuyBalanceMin": 1000,
+    "rebuyBalanceMax": 3000,
+    "startingBalanceMin": 2000,
+    "startingBalanceMax": 10000,
+    "personalities": {
+      "conservative": { "cashoutMin": 1.2, "cashoutMax": 2.5 },
+      "moderate":     { "cashoutMin": 1.5, "cashoutMax": 5   },
+      "aggressive":   { "cashoutMin": 2,   "cashoutMax": 10  },
+      "degen":        { "cashoutMin": 3,   "cashoutMax": 25  }
+    }
+  },
+  "crashHistory": {
+    "maxEntries": 10
+  }
+}
