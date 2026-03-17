@@ -53,10 +53,10 @@ export class MultiplierText extends Container {
     this.scale.set(1.1);
   }
 
-  showBetting(_countdown: number) {
-    this.text.text      = 'PLACE YOUR BETS';
+  showBetting(_countdown: number, betPlaced = false) {
+    this.text.text      = betPlaced ? 'BET ACCEPTED' : 'PLACE YOUR BETS';
     this.style.fontSize = 28;
-    this.setColor(0xffdd00);
+    this.setColor(betPlaced ? 0x00ff88 : 0xffdd00);
     this.scale.set(1);
   }
 

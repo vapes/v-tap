@@ -19,22 +19,32 @@ No test framework is configured — there are no tests.
 
 ### Scene Flow
 
-`main.ts` bootstraps a Pixi Application, then `Game.ts` manages navigation through three scenes in order:
+`main.ts` bootstraps a Pixi Application, then `Game.ts` manages navigation:
 
 ```
-LobbyScene → TableSelectScene → GameScene
+LobbyScene → GameModeSelectScene → GameScene (crash mode)
+                                 → TapGameScene (tap mode)
 ```
 
 `Game.ts` is the sole orchestrator: it instantiates scenes, wires up callbacks between them, and handles resize events.
 
-### Game Logic Layer (`src/logic/`)
+### Game Modes
 
-**`RoundManager.ts`** — core state machine with states `WAITING | RUNNING | CRASHED | RESULT`
-- Crash point drawn via inverse CDF: `P(crash > m) = (1 - houseEdge) / m`, giving 99% RTP
-- Multiplier grows exponentially: `e^(elapsed × growthRate)` where `growthRate` is randomized each round from `[0.15, 0.275]`
-- Tracks player balance, current bet, pot, cashout history
+There are two independent game modes, each with its own logic and scene:
 
-**`BotPlayers.ts`** — 20–50 bot agents (randomized per session), each with a named personality (`conservative`, `moderate`, `aggressive`, `degen`) that determines their cashout range. Bots have a 15% chance to go "greedy" and extend their target. Per-round participation is random (20–70% of bots bet each round).
+**Crash mode** (`GameScene` + `RoundManager` + `BotPlayers`):
+- Multiplier grows until a hidden crash point; players cash out before it crashes
+- `RoundManager.ts` — state machine with states `WAITING | RUNNING | CRASHED | RESULT`
+- Crash point via inverse CDF: `P(crash > m) = (1 - houseEdge) / m`, giving 99% RTP
+- Multiplier grows exponentially: `e^(elapsed × growthRate)` where `growthRate` is randomized per round from `[0.15, 0.275]`
+- `BotPlayers.ts` — 20–50 bots with personalities (`conservative`, `moderate`, `aggressive`, `degen`) that determine cashout range; 15% chance to go "greedy"; 20–70% participate per round
+
+**Tap mode** (`TapGameScene` + `TapRoundManager` + `TapBotPlayers`):
+- A hidden timer runs; whoever taps last before time expires wins the pot
+- `TapRoundManager.ts` — state machine with states `BETTING | RUNNING | ENDED | RESULT`
+- Timer duration drawn from same inverse-CDF shape: `P(t > x) = timerMin / x`, clamped to `[timerMin, timerMax]`
+- First tap per participant is free; subsequent taps cost `tableBet` and are added to the pot (up to `maxTaps`)
+- Winner receives `pot × (1 - casinoCut)`; `lastTapper` at round end wins
 
 ### UI Layer (`src/ui/`)
 

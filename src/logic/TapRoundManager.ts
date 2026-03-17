@@ -75,8 +75,7 @@ export class TapRoundManager {
     this.lastTapper  = null;
     this.tapHistory  = [];
 
-    const { timerMin, timerMax } = mathConfig.tap;
-    this.hiddenDuration = timerMin + Math.random() * (timerMax - timerMin);
+    this.hiddenDuration = this.generateDuration();
   }
 
   update(dt: number): boolean {
@@ -136,6 +135,14 @@ export class TapRoundManager {
     if (cost > 0) this.potValue += cost;
 
     return cost;
+  }
+
+  /** Inverse-CDF distribution matching crash multiplier shape: P(t > x) = timerMin / x */
+  private generateDuration(): number {
+    const r = Math.random();
+    const { timerMin, timerMax } = mathConfig.tap;
+    const raw = timerMin / (1 - r);
+    return Math.min(Math.max(raw, timerMin), timerMax);
   }
 
   private determineWinner() {

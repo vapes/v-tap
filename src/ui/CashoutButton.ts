@@ -6,6 +6,7 @@ export class CashoutButton extends Container {
   private paw:           Graphics;
   private glowRing:      Graphics;
   private countdownText: Text;
+  private tapCountText:  Text;
   private isEnabled     = true;
   private pulsePhase    = 0;
 
@@ -44,6 +45,18 @@ export class CashoutButton extends Container {
     this.countdownText.anchor.set(0.5);
     this.countdownText.visible = false;
     this.addChild(this.countdownText);
+
+    this.tapCountText = new Text('', new TextStyle({
+      fontFamily: '"Courier New", monospace',
+      fontSize:   13,
+      fontWeight: 'bold',
+      fill:       0xffffff,
+      align:      'center',
+    }));
+    this.tapCountText.anchor.set(0.5);
+    this.tapCountText.y       = this.RADIUS * 0.48;
+    this.tapCountText.visible = false;
+    this.addChild(this.tapCountText);
 
     this.drawButton(0x00cc66);
     this.drawPaw(0xffffff);
@@ -111,6 +124,16 @@ export class CashoutButton extends Container {
     this.paw.visible           = true;
   }
 
+  setTapCount(used: number, max: number) {
+    const remaining = max - used;
+    this.tapCountText.text    = `${remaining}/${max}`;
+    this.tapCountText.visible = remaining > 0 && used >= 0;
+  }
+
+  hideTapCount() {
+    this.tapCountText.visible = false;
+  }
+
   private handleTap(_e: FederatedPointerEvent) {
     if (!this.isEnabled) return;
     this.onTap?.();
@@ -134,9 +157,9 @@ export class CashoutButton extends Container {
   showBetPlaced() {
     this.isEnabled = false;
     this.cursor    = 'default';
-    this.drawButton(0xffcc00);
+    this.drawButton(0x00cc66);
     this.drawPaw(0xffffff);
-    this.drawGlow(0xffee00, 0.9);
+    this.drawGlow(0x00ff88, 0.9);
     this.alpha = 1;
     this.hideCountdown();
   }
@@ -282,18 +305,18 @@ export class CashoutButton extends Container {
     this.alpha      = 1;
     this.pulsePhase = 0;
     this.clearProgressRing();
-    this.drawButton(0xff8800);
+    this.drawButton(0x00cc66);
     this.drawPaw(0xffffff);
-    this.drawGlow(0xff8800, 0.4);
+    this.drawGlow(0x00cc66, 0.4);
     this.scale.set(1);
     this.hideCountdown();
   }
 
   animateTap(dt: number, elapsed: number) {
     if (!this.isEnabled) return;
-    this.pulsePhase += dt * 5;
+    this.pulsePhase += dt * 4;
     const intensity  = Math.min(elapsed * 0.05, 1) * (0.5 + 0.5 * Math.sin(this.pulsePhase));
-    const color      = elapsed < 10 ? 0xff8800 : elapsed < 20 ? 0xff5500 : 0xff2200;
+    const color      = elapsed < 10 ? 0x00cc66 : elapsed < 20 ? 0xddaa00 : 0xff4400;
     this.drawButton(color);
     this.drawPaw(0xffffff);
     this.drawGlow(color, intensity);

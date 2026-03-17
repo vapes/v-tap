@@ -5,7 +5,6 @@ import { MultiplierText } from '../ui/MultiplierText';
 import { CashoutButton } from '../ui/CashoutButton';
 import { PotDisplay } from '../ui/PotDisplay';
 import { PlayersPanel } from '../ui/PlayersPanel';
-import { ChatPanel } from '../ui/ChatPanel';
 import { HeaderBar } from '../ui/HeaderBar';
 import mathConfig from '../math-config.json';
 
@@ -27,7 +26,6 @@ export class GameScene {
   private cashoutButton:  CashoutButton;
   private potDisplay:     PotDisplay;
   private playersPanel:   PlayersPanel;
-  private chatPanel:      ChatPanel;
   private crashFlash:     Graphics;
   private balanceText:    Text;
   private buttonLabel:    Text;
@@ -76,7 +74,6 @@ export class GameScene {
     this.cashoutButton  = new CashoutButton();
     this.potDisplay     = new PotDisplay();
     this.playersPanel   = new PlayersPanel();
-    this.chatPanel      = new ChatPanel();
 
     this.buttonLabel = new Text('', new TextStyle({
       fontFamily: '"Courier New", monospace',
@@ -111,10 +108,8 @@ export class GameScene {
       this.potDisplay.flash();
     };
 
-    this.botPlayers.onBotCashout = (botIndex, name, mult) => {
+    this.botPlayers.onBotCashout = (botIndex, _name, mult) => {
       this.playersPanel.updatePlayerStatus(botIndex + 1, mult);
-      const bot = this.botPlayers.getBots()[botIndex];
-      this.chatPanel.onBotWin(name, mult, bot?.neonColor ?? 0xcccccc);
     };
 
     this.cashoutButton.onTap = () => this.handleButtonTap();
@@ -126,7 +121,6 @@ export class GameScene {
     this.container.addChild(this.cashoutButton);
     this.container.addChild(this.buttonLabel);
     this.container.addChild(this.balanceText);
-    this.container.addChild(this.chatPanel);
     this.container.addChild(this.crashFlash);
     this.container.addChild(this.winFlash);
     this.container.addChild(this.headerBar);
@@ -184,7 +178,7 @@ export class GameScene {
   private updateBetting(dt: number) {
     this.bettingTimer -= dt;
     const remaining = Math.max(this.bettingTimer, 0);
-    this.multiplierText.showBetting(remaining);
+    this.multiplierText.showBetting(remaining, this.roundManager.playerInRound);
     const elapsed = this.BETTING_DELAY - this.bettingTimer;
     this.botPlayers.tickBetting(elapsed, this.roundManager.tableBet);
     const progress = remaining / this.BETTING_DELAY;
@@ -213,19 +207,11 @@ export class GameScene {
     this.playersPanel.sortForRound(this.roundManager.multiplier);
     this.playersPanel.animate(dt);
 
-    this.chatPanel.animate(dt);
-
-    const bots      = this.botPlayers.getBots();
-    const randomBot = bots[Math.floor(Math.random() * bots.length)];
-    if (randomBot && !randomBot.hasCashedOut && randomBot.betCommitted) {
-      this.chatPanel.maybeRandomChat(randomBot.name, randomBot.neonColor);
-    }
   }
 
   private updateCrashed(dt: number) {
     this.crashFlash.alpha = Math.max(this.crashFlash.alpha - dt * 2, 0);
     this.playersPanel.animate(dt);
-    this.chatPanel.animate(dt);
     this.tickPlayerWinFly(dt);
     this.tickWinAnimation(dt);
     this.resultTimer -= dt;
@@ -236,7 +222,6 @@ export class GameScene {
   }
 
   private updateResult(dt: number) {
-    this.chatPanel.animate(dt);
     this.tickPlayerWinFly(dt);
     this.tickWinAnimation(dt);
     this.resultTimer -= dt;
@@ -307,6 +292,8 @@ export class GameScene {
       }
     }
 
+    this.playersPanel.showOnlyBettingPlayers();
+
     if (this.roundManager.playerInRound) {
       this.cashoutButton.showCashoutMode();
       this.setButtonLabel('CASH OUT', 0x888888);
@@ -336,7 +323,6 @@ export class GameScene {
     if (this.roundManager.playerInRound && !this.roundManager.playerCashedOut) {
       this.cashoutButton.showCrashed();
       this.setButtonLabel('BUST', 0xff4444);
-      this.chatPanel.onPlayerLose();
       this.playersPanel.updatePlayerStatus(PLAYER_ROW, 'busted');
     }
 
@@ -345,7 +331,6 @@ export class GameScene {
     for (let i = 0; i < bots.length; i++) {
       if (bots[i].betCommitted && !bots[i].hasCashedOut) {
         this.playersPanel.updatePlayerStatus(i + 1, 'busted');
-        this.chatPanel.onBotLose(bots[i].name, bots[i].neonColor);
       }
     }
 
@@ -625,7 +610,6 @@ export class GameScene {
           this.cashoutButton.showCashedOut(mult);
           this.setButtonLabel(`${mult.toFixed(2)}×`, 0x00ff88);
           this.playersPanel.updatePlayerStatus(PLAYER_ROW, mult);
-          this.chatPanel.onPlayerWin(mult);
         }
       } else {
         this.playerPendingNextRound = !this.playerPendingNextRound;
@@ -655,9 +639,7 @@ export class GameScene {
     const rightX = leftW + 1;
     const rightW = w - rightX;
 
-    this.playersPanel.x = 0;
-    this.playersPanel.y = headerH;
-    this.playersPanel.layout(leftW, h - headerH);
+    this.layoutPlayersPanel();
 
     this.potDisplay.x = rightX;
     this.potDisplay.y = headerH;
@@ -675,8 +657,18 @@ export class GameScene {
     this.balanceText.x = rightX + rightW / 2;
     this.balanceText.y = headerH + (h - headerH) * 0.55 + 112;
 
-    const chatTop = headerH + Math.floor((h - headerH) * 0.70);
-    this.chatPanel.layout(rightX, chatTop, rightW, h - chatTop);
+  }
+
+  private layoutPlayersPanel() {
+    const w = this.app.screen.width;
+    const h = this.app.screen.height;
+    const headerH = HeaderBar.HEIGHT;
+    const potAreaH = 48;
+
+    this.playersPanel.x = 0;
+    this.playersPanel.y = headerH + potAreaH;
+    this.playersPanel.layout(w, h - headerH - potAreaH);
+    this.playersPanel.alpha = 0.5;
   }
 
   onResize(_width: number, _height: number) {

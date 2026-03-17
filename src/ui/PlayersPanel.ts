@@ -13,7 +13,7 @@ export interface PlayerRowData {
   tapCount?: number;
 }
 
-const ROW_H = 14;
+const ROW_H = 28;
 const PAD_X = 6;
 
 interface RowView {
@@ -30,6 +30,7 @@ export class PlayersPanel extends Container {
   private rows:           RowView[]                           = [];
   private neonColors:     number[]                            = [];
   private inRound:        boolean[]                           = [];
+  private rowVisible:     boolean[]                           = [];
   private statusValues:   Array<null | number | 'busted' | 'out'> = [];
   private isPlayerRow:    boolean[]                           = [];
   private targetY:        number[]                            = [];
@@ -82,8 +83,16 @@ export class PlayersPanel extends Container {
     });
   }
 
+  private visibleRowCount(): number {
+    let count = 0;
+    for (let i = 0; i < this.rowVisible.length; i++) {
+      if (this.rowVisible[i]) count++;
+    }
+    return count;
+  }
+
   private maxScrollY(): number {
-    return Math.max(0, this.rows.length * ROW_H - this.colHeight);
+    return Math.max(0, this.visibleRowCount() * ROW_H - this.colHeight);
   }
 
   private setScroll(y: number) {
@@ -98,6 +107,7 @@ export class PlayersPanel extends Container {
     this.rows         = [];
     this.neonColors   = [];
     this.inRound      = [];
+    this.rowVisible   = [];
     this.statusValues = [];
     this.isPlayerRow  = [];
     this.targetY      = [];
@@ -120,7 +130,7 @@ export class PlayersPanel extends Container {
 
       const nameText = new Text(isMe ? 'YOU' : p.name, new TextStyle({
         fontFamily: '"Courier New", monospace',
-        fontSize:   isMe ? 10 : 9,
+        fontSize:   isMe ? 20 : 18,
         fontWeight: isMe ? 'bold' : 'normal',
         fill:       isMe ? 0x00ff88 : 0x666666,
       }));
@@ -130,7 +140,7 @@ export class PlayersPanel extends Container {
 
       const statusText = new Text('', new TextStyle({
         fontFamily: '"Courier New", monospace',
-        fontSize:   9,
+        fontSize:   18,
         fontWeight: 'bold',
         fill:       isMe ? 0x00ff88 : 0x666666,
         align:      'right',
@@ -143,6 +153,7 @@ export class PlayersPanel extends Container {
       this.rows.push({ container: rowContainer, bg, nameText, statusText });
       this.neonColors.push(p.neonColor);
       this.inRound.push(false);
+      this.rowVisible.push(true);
       this.statusValues.push(null);
       this.isPlayerRow.push(isMe);
       this.targetY.push(i * ROW_H);
@@ -157,8 +168,27 @@ export class PlayersPanel extends Container {
     this.rows[index].statusText.text = betting ? 'BET' : '';
   }
 
+  showOnlyBettingPlayers() {
+    let pos = 0;
+    for (let i = 0; i < this.rows.length; i++) {
+      if (this.inRound[i]) {
+        this.rowVisible[i] = true;
+        this.rows[i].container.visible = true;
+        this.targetY[i] = pos * ROW_H;
+        this.rows[i].container.y = pos * ROW_H;
+        pos++;
+      } else {
+        this.rowVisible[i] = false;
+        this.rows[i].container.visible = false;
+      }
+    }
+    this.setScroll(0);
+  }
+
   resetForBetting() {
     for (let i = 0; i < this.rows.length; i++) {
+      this.rowVisible[i]           = true;
+      this.rows[i].container.visible = true;
       this.inRound[i]              = false;
       this.statusValues[i]         = null;
       this.lastTapTimes[i]         = -1;
@@ -198,22 +228,23 @@ export class PlayersPanel extends Container {
 
   /** Call every frame during RUNNING to keep rows sorted by tap (cashout) first. */
   sortForRound(currentMultiplier: number) {
-    const keys = this.rows.map((_, i) => {
+    const keys: { index: number; key: number }[] = [];
+    for (let i = 0; i < this.rows.length; i++) {
+      if (!this.rowVisible[i]) continue;
       const s = this.statusValues[i];
       let key: number;
       if (typeof s === 'number') {
-        key = s + 1000; // tapped (cashed out) at top, sorted by cashout multiplier
+        key = s + 1000;
       } else if (s === null && this.inRound[i]) {
-        key = currentMultiplier; // still live, below tapped
+        key = currentMultiplier;
       } else if (s === 'busted') {
         key = -1;
       } else {
-        key = -2; // out
+        key = -2;
       }
-      return { index: i, key };
-    });
+      keys.push({ index: i, key });
+    }
 
-    // Stable sort descending
     keys.sort((a, b) => b.key - a.key || a.index - b.index);
 
     for (let pos = 0; pos < keys.length; pos++) {
@@ -305,7 +336,9 @@ export class PlayersPanel extends Container {
 
   /** Sort by last tap time descending: most recent tapper at top (they're winning). */
   sortForTapRound() {
-    const keys = this.rows.map((_, i) => {
+    const keys: { index: number; key: number }[] = [];
+    for (let i = 0; i < this.rows.length; i++) {
+      if (!this.rowVisible[i]) continue;
       const tapTime = this.lastTapTimes[i];
       let key: number;
       if (tapTime >= 0) {
@@ -315,8 +348,8 @@ export class PlayersPanel extends Container {
       } else {
         key = -1;
       }
-      return { index: i, key };
-    });
+      keys.push({ index: i, key });
+    }
 
     keys.sort((a, b) => b.key - a.key || a.index - b.index);
 
@@ -328,7 +361,9 @@ export class PlayersPanel extends Container {
   private restoreOrder() {
     for (let i = 0; i < this.rows.length; i++) {
       this.targetY[i] = i * ROW_H;
+      this.rows[i].container.y = i * ROW_H;
     }
+    this.setScroll(0);
   }
 
 }

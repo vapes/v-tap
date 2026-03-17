@@ -5,7 +5,6 @@ import { MultiplierText } from '../ui/MultiplierText';
 import { CashoutButton } from '../ui/CashoutButton';
 import { PotDisplay } from '../ui/PotDisplay';
 import { PlayersPanel } from '../ui/PlayersPanel';
-import { ChatPanel } from '../ui/ChatPanel';
 import { HeaderBar } from '../ui/HeaderBar';
 import mathConfig from '../math-config.json';
 
@@ -26,7 +25,6 @@ export class TapGameScene {
   private cashoutButton:  CashoutButton;
   private potDisplay:     PotDisplay;
   private playersPanel:   PlayersPanel;
-  private chatPanel:      ChatPanel;
   private endFlash:       Graphics;
   private balanceText:    Text;
   private buttonLabel:    Text;
@@ -46,6 +44,7 @@ export class TapGameScene {
   private bettingTimer          = 0;
   private resultTimer           = 0;
   private playerPendingNextRound = false;
+  private labelBlinkPhase        = 0;
 
   private readonly BETTING_DELAY = mathConfig.tap.bettingDelaySec;
   private readonly RESULT_DELAY  = mathConfig.tap.resultDelaySec;
@@ -65,7 +64,6 @@ export class TapGameScene {
     this.cashoutButton  = new CashoutButton();
     this.potDisplay     = new PotDisplay();
     this.playersPanel   = new PlayersPanel();
-    this.chatPanel      = new ChatPanel();
 
     this.buttonLabel = new Text('', new TextStyle({
       fontFamily: '"Courier New", monospace',
@@ -105,7 +103,6 @@ export class TapGameScene {
       this.playersPanel.updateTapStatus(botIndex + 1, bot.tapCount, true, bot.lastTapTime);
       this.potDisplay.setPot(this.roundManager.potValue);
       this.potDisplay.flash();
-      this.chatPanel.maybeRandomChat(name, bot.neonColor);
     };
 
     this.cashoutButton.onTap = () => this.handleButtonTap();
@@ -116,7 +113,6 @@ export class TapGameScene {
     this.container.addChild(this.cashoutButton);
     this.container.addChild(this.buttonLabel);
     this.container.addChild(this.balanceText);
-    this.container.addChild(this.chatPanel);
     this.container.addChild(this.endFlash);
     this.container.addChild(this.winFlash);
     this.container.addChild(this.headerBar);
@@ -174,7 +170,7 @@ export class TapGameScene {
   private updateBetting(dt: number) {
     this.bettingTimer -= dt;
     const remaining = Math.max(this.bettingTimer, 0);
-    this.multiplierText.showBetting(remaining);
+    this.multiplierText.showBetting(remaining, this.roundManager.playerInRound);
     const elapsed = this.BETTING_DELAY - this.bettingTimer;
     this.botPlayers.tickBetting(elapsed);
     const progress = remaining / this.BETTING_DELAY;
@@ -199,17 +195,22 @@ export class TapGameScene {
 
     if (this.roundManager.playerInRound) {
       this.cashoutButton.animateTap(dt, this.roundManager.elapsedTime);
+      if (this.roundManager.playerTapCount > 0) {
+        this.labelBlinkPhase += dt * 4;
+        this.buttonLabel.alpha = 0.5 + 0.5 * Math.abs(Math.sin(this.labelBlinkPhase));
+      } else {
+        this.labelBlinkPhase  = 0;
+        this.buttonLabel.alpha = 1;
+      }
     }
 
     this.playersPanel.sortForTapRound();
     this.playersPanel.animate(dt);
-    this.chatPanel.animate(dt);
   }
 
   private updateEnded(dt: number) {
     this.endFlash.alpha = Math.max(this.endFlash.alpha - dt * 2, 0);
     this.playersPanel.animate(dt);
-    this.chatPanel.animate(dt);
     this.tickWinAnimation(dt);
     this.resultTimer -= dt;
     if (this.resultTimer <= 0) {
@@ -219,7 +220,6 @@ export class TapGameScene {
   }
 
   private updateResult(dt: number) {
-    this.chatPanel.animate(dt);
     this.tickWinAnimation(dt);
     this.resultTimer -= dt;
     if (this.resultTimer <= 0) {
@@ -240,7 +240,7 @@ export class TapGameScene {
     this.potDisplay.setPot(this.roundManager.potValue);
     this.potDisplay.hideTotalBet();
     this.headerBar.updateTapHistory(this.roundManager.recentDurations);
-    this.multiplierText.showBetting(this.BETTING_DELAY);
+    this.multiplierText.showBetting(this.BETTING_DELAY, this.roundManager.playerInRound);
     this.multiplierText.scale.set(1);
 
     if (this.playerPendingNextRound && this.roundManager.playerBalance >= this.roundManager.tableBet) {
@@ -283,8 +283,11 @@ export class TapGameScene {
       }
     }
 
+    this.playersPanel.showOnlyBettingPlayers();
+
     if (this.roundManager.playerInRound) {
       this.cashoutButton.showTapMode();
+      this.cashoutButton.setTapCount(0, mathConfig.tap.maxTaps);
       this.setButtonLabel('TAP!', 0xff8800);
       this.playersPanel.updatePlayerStatus(PLAYER_ROW, null);
     } else if (this.roundManager.playerBalance >= this.roundManager.tableBet) {
@@ -295,9 +298,11 @@ export class TapGameScene {
         this.cashoutButton.showNextRoundMode(this.roundManager.tableBet);
         this.setButtonLabel(`BET NEXT $${this.roundManager.tableBet}`, 0x88aadd);
       }
+      this.cashoutButton.hideTapCount();
       this.playersPanel.updatePlayerStatus(PLAYER_ROW, 'out');
     } else {
       this.cashoutButton.showNotInRound();
+      this.cashoutButton.hideTapCount();
       this.setButtonLabel('', 0x888888);
       this.playersPanel.updatePlayerStatus(PLAYER_ROW, 'out');
     }
@@ -329,22 +334,24 @@ export class TapGameScene {
       const maxTaps = mathConfig.tap.maxTaps;
       const ptc = this.roundManager.playerTapCount;
 
+      this.cashoutButton.setTapCount(ptc, maxTaps);
       if (ptc >= maxTaps) {
         this.cashoutButton.showTapDisabled();
-        this.setButtonLabel(`MAX ${maxTaps}/${maxTaps}`, 0x888888);
+        this.setButtonLabel('MAX TAPS', 0x888888);
       } else if (ptc > 0 && this.roundManager.playerBalance < this.roundManager.tableBet) {
         this.cashoutButton.showTapDisabled();
         this.setButtonLabel('NO FUNDS', 0xff4444);
       } else {
-        const tapCostLabel = ptc > 0
-          ? `TAP ${ptc}/${maxTaps} ($${this.roundManager.tableBet})`
-          : `TAP 0/${maxTaps}`;
-        this.setButtonLabel(tapCostLabel, 0xff8800);
+        const tapCostLabel = ptc > 0 ? 'BET MORE TO WIN' : 'TAP TO BET';
+        this.setButtonLabel(tapCostLabel, ptc > 0 ? 0xffdd00 : 0xff8800);
       }
     }
   }
 
   private onEnded() {
+    this.labelBlinkPhase  = 0;
+    this.buttonLabel.alpha = 1;
+    this.cashoutButton.hideTapCount();
     this.endFlash.alpha = 0.6;
     this.multiplierText.showEnded(this.roundManager.elapsedTime);
 
@@ -355,7 +362,6 @@ export class TapGameScene {
         this.setButtonLabel('YOU WON!', 0x00ff88);
       } else {
         this.setButtonLabel('TIME UP', 0xff4444);
-        this.chatPanel.onPlayerLose();
       }
     }
 
@@ -529,7 +535,6 @@ export class TapGameScene {
           this.potDisplay.setPot(this.roundManager.potValue);
           this.potDisplay.flash();
           this.updateBalanceText();
-          this.chatPanel.addMessage('YOU', 'tapped!', 0x00ff88);
         }
       } else {
         this.playerPendingNextRound = !this.playerPendingNextRound;
@@ -559,9 +564,7 @@ export class TapGameScene {
     const rightX = leftW + 1;
     const rightW = w - rightX;
 
-    this.playersPanel.x = 0;
-    this.playersPanel.y = headerH;
-    this.playersPanel.layout(leftW, h - headerH);
+    this.layoutPlayersPanel();
 
     this.potDisplay.x = rightX;
     this.potDisplay.y = headerH;
@@ -579,8 +582,18 @@ export class TapGameScene {
     this.balanceText.x = rightX + rightW / 2;
     this.balanceText.y = headerH + (h - headerH) * 0.55 + 112;
 
-    const chatTop = headerH + Math.floor((h - headerH) * 0.70);
-    this.chatPanel.layout(rightX, chatTop, rightW, h - chatTop);
+  }
+
+  private layoutPlayersPanel() {
+    const w = this.app.screen.width;
+    const h = this.app.screen.height;
+    const headerH = HeaderBar.HEIGHT;
+    const potAreaH = 48;
+
+    this.playersPanel.x = 0;
+    this.playersPanel.y = headerH + potAreaH;
+    this.playersPanel.layout(w, h - headerH - potAreaH);
+    this.playersPanel.alpha = 0.5;
   }
 
   onResize(_width: number, _height: number) {
