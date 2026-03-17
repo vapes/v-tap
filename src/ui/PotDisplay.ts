@@ -11,6 +11,9 @@ export class PotDisplay extends Container {
   private potStyle: TextStyle;
   private potText: Text;
 
+  private totalBetStyle: TextStyle;
+  private totalBetText: Text;
+
   private flashTimer = 0;
   private static readonly FLASH_DUR = 0.45;
   private static readonly BASE_COLOR = 0xffdd00;
@@ -32,10 +35,31 @@ export class PotDisplay extends Container {
     this.potText = new Text('POT: $0', this.potStyle);
     this.potText.anchor.set(0.5, 0);
     this.addChild(this.potText);
+
+    this.totalBetStyle = new TextStyle({
+      fontFamily: '"Courier New", monospace',
+      fontSize: 11,
+      fontWeight: 'bold',
+      fill: 0xffffff,
+    });
+    this.totalBetText = new Text('', this.totalBetStyle);
+    this.totalBetText.anchor.set(0.5, 0);
+    this.totalBetText.visible = false;
+    this.addChild(this.totalBetText);
   }
 
   setPot(value: number) {
     this.potText.text = `POT: $${value.toLocaleString('en-US')}`;
+  }
+
+  setTotalBet(value: number, isLastTapper: boolean) {
+    this.totalBetText.text = `total bet: $${value.toLocaleString('en-US')}`;
+    this.totalBetStyle.fill = isLastTapper ? 0x00ff88 : 0xffffff;
+    this.totalBetText.visible = true;
+  }
+
+  hideTotalBet() {
+    this.totalBetText.visible = false;
   }
 
   flash() {
@@ -55,6 +79,8 @@ export class PotDisplay extends Container {
   layout(colWidth: number, topY = 8) {
     this.potText.x = colWidth / 2;
     this.potText.y = topY;
+    this.totalBetText.x = colWidth / 2;
+    this.totalBetText.y = topY + 22;
   }
 
   getPotCenter(): { x: number; y: number } {

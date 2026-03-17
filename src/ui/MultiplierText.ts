@@ -67,6 +67,23 @@ export class MultiplierText extends Container {
     this.scale.set(1);
   }
 
+  showElapsedTime(seconds: number) {
+    this.text.text = `${seconds.toFixed(1)}s`;
+    this.baseScale = 1 + Math.min(seconds * 0.005, 0.15);
+
+    if (seconds < 5)       this.setColor(0x00ff88);
+    else if (seconds < 15) this.setColor(0xffdd00);
+    else if (seconds < 25) this.setColor(0xff8800);
+    else                   this.setColor(0xff2200);
+  }
+
+  showEnded(duration: number) {
+    this.text.text      = `TIME'S UP!\n${duration.toFixed(1)}s`;
+    this.style.fontSize = 36;
+    this.setColor(0xff4400);
+    this.scale.set(1.1);
+  }
+
   reset() {
     this.style.fontSize = 56;
     this.setColor(0x00ff88);

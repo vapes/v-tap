@@ -275,4 +275,50 @@ export class CashoutButton extends Container {
     this.drawGlow(color, intensity);
     this.scale.set(1 + intensity * 0.04);
   }
+
+  showTapMode() {
+    this.isEnabled  = true;
+    this.cursor     = 'pointer';
+    this.alpha      = 1;
+    this.pulsePhase = 0;
+    this.clearProgressRing();
+    this.drawButton(0xff8800);
+    this.drawPaw(0xffffff);
+    this.drawGlow(0xff8800, 0.4);
+    this.scale.set(1);
+    this.hideCountdown();
+  }
+
+  animateTap(dt: number, elapsed: number) {
+    if (!this.isEnabled) return;
+    this.pulsePhase += dt * 5;
+    const intensity  = Math.min(elapsed * 0.05, 1) * (0.5 + 0.5 * Math.sin(this.pulsePhase));
+    const color      = elapsed < 10 ? 0xff8800 : elapsed < 20 ? 0xff5500 : 0xff2200;
+    this.drawButton(color);
+    this.drawPaw(0xffffff);
+    this.drawGlow(color, intensity);
+    this.scale.set(1 + intensity * 0.04);
+  }
+
+  showTapDisabled() {
+    this.isEnabled = false;
+    this.cursor    = 'default';
+    this.clearProgressRing();
+    this.drawButton(0x553300);
+    this.drawPaw(0x886644);
+    this.drawGlow(0xff8800, 0.2);
+    this.alpha = 0.6;
+    this.hideCountdown();
+  }
+
+  showTimeUp() {
+    this.isEnabled = false;
+    this.cursor    = 'default';
+    this.clearProgressRing();
+    this.drawButton(0x661111);
+    this.drawPaw(0xff4444);
+    this.drawGlow(0xff0000, 0.4);
+    this.alpha = 0.7;
+    this.hideCountdown();
+  }
 }

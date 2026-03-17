@@ -1,13 +1,14 @@
 {
   "meta": {
-    "version": "2.0.0",
+    "version": "3.0.0",
     "rtp": 0.99,
     "houseEdge": 0.01
   },
   "crash": {
     "houseEdge": 0.01,
     "minMultiplier": 1,
-    "maxMultiplier": 50
+    "maxMultiplier": 50,
+    "fixedBet": 10
   },
   "growth": {
     "rateMin": 0.15,
@@ -43,5 +44,21 @@
   },
   "crashHistory": {
     "maxEntries": 10
+  },
+  "tap": {
+    "fixedBet": 10,
+    "casinoCut": 0.01,
+    "maxTaps": 5,
+    "timerMin": 5,
+    "timerMax": 30,
+    "bettingDelaySec": 8,
+    "resultDelaySec": 3,
+    "endedDisplaySec": 2,
+    "botTapPersonalities": {
+      "conservative": { "intervalMin": 2.0, "intervalMax": 5.0 },
+      "moderate":     { "intervalMin": 1.0, "intervalMax": 3.5 },
+      "aggressive":   { "intervalMin": 0.5, "intervalMax": 2.0 },
+      "degen":        { "intervalMin": 0.2, "intervalMax": 1.2 }
+    }
   }
 }

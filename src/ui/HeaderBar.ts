@@ -78,4 +78,28 @@ export class HeaderBar extends Container {
       xOff += pillW + 3;
     }
   }
+
+  updateTapHistory(durations: number[]) {
+    this.historyBox.removeChildren();
+    const recent = durations.slice(-8).reverse();
+    let xOff = 0;
+    for (const dur of recent) {
+      const color = dur < 8 ? 0xff3333 : dur < 15 ? 0xffaa00 : 0x00ff88;
+      const label = `${dur.toFixed(1)}s`;
+      const pillW = label.length * 6 + 8;
+
+      const pill = new Graphics();
+      pill.beginFill(color, 0.18);
+      pill.drawRoundedRect(-xOff - pillW, -7, pillW, 14, 3);
+      pill.endFill();
+      this.historyBox.addChild(pill);
+
+      const t = new Text(label, { fontFamily: '"Courier New", monospace', fontSize: 9, fill: color } as TextStyle);
+      t.anchor.set(1, 0.5);
+      t.x = -xOff - 4;
+      this.historyBox.addChild(t);
+
+      xOff += pillW + 3;
+    }
+  }
 }

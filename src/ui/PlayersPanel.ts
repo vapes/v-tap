@@ -10,6 +10,7 @@ export interface PlayerRowData {
   isPlayer:  boolean;
   status:    null | number | 'busted' | 'out';
   inRound:   boolean;
+  tapCount?: number;
 }
 
 const ROW_H = 14;
@@ -32,6 +33,7 @@ export class PlayersPanel extends Container {
   private statusValues:   Array<null | number | 'busted' | 'out'> = [];
   private isPlayerRow:    boolean[]                           = [];
   private targetY:        number[]                            = [];
+  private lastTapTimes:   number[]                            = [];
   private colWidth  = 0;
   private colHeight = 0;
   private scrollY   = 0;
@@ -99,6 +101,7 @@ export class PlayersPanel extends Container {
     this.statusValues = [];
     this.isPlayerRow  = [];
     this.targetY      = [];
+    this.lastTapTimes = [];
 
     for (let i = 0; i < players.length; i++) {
       const p    = players[i];
@@ -143,6 +146,7 @@ export class PlayersPanel extends Container {
       this.statusValues.push(null);
       this.isPlayerRow.push(isMe);
       this.targetY.push(i * ROW_H);
+      this.lastTapTimes.push(-1);
     }
 
   }
@@ -157,6 +161,7 @@ export class PlayersPanel extends Container {
     for (let i = 0; i < this.rows.length; i++) {
       this.inRound[i]              = false;
       this.statusValues[i]         = null;
+      this.lastTapTimes[i]         = -1;
       this.rows[i].statusText.text = '';
       const defaultColor = this.isPlayerRow[i] ? 0x00ff88 : 0x666666;
       this.rows[i].nameText.style.fill   = defaultColor;
@@ -272,6 +277,51 @@ export class PlayersPanel extends Container {
     const w = this.colWidth || 100;
     for (const row of this.rows) {
       row.statusText.x = w - PAD_X;
+    }
+  }
+
+  updateTapStatus(index: number, tapCount: number, isLastTapper: boolean, lastTapTime: number) {
+    if (index < 0 || index >= this.rows.length) return;
+    this.lastTapTimes[index] = lastTapTime;
+    const row = this.rows[index];
+    if (tapCount > 0 && lastTapTime >= 0) {
+      row.statusText.text = `${lastTapTime.toFixed(1)}s`;
+      if (isLastTapper) {
+        const color = this.isPlayerRow[index] ? 0xffaa00 : 0xff8800;
+        row.nameText.style.fill   = color;
+        row.statusText.style.fill = color;
+      } else {
+        const color = this.isPlayerRow[index] ? 0x00ff88 : 0x888888;
+        row.nameText.style.fill   = color;
+        row.statusText.style.fill = color;
+      }
+    } else if (this.inRound[index]) {
+      row.statusText.text = 'BET';
+      const color = this.isPlayerRow[index] ? 0x00ff88 : 0x666666;
+      row.nameText.style.fill   = color;
+      row.statusText.style.fill = color;
+    }
+  }
+
+  /** Sort by last tap time descending: most recent tapper at top (they're winning). */
+  sortForTapRound() {
+    const keys = this.rows.map((_, i) => {
+      const tapTime = this.lastTapTimes[i];
+      let key: number;
+      if (tapTime >= 0) {
+        key = tapTime + 1000;
+      } else if (this.inRound[i]) {
+        key = 0;
+      } else {
+        key = -1;
+      }
+      return { index: i, key };
+    });
+
+    keys.sort((a, b) => b.key - a.key || a.index - b.index);
+
+    for (let pos = 0; pos < keys.length; pos++) {
+      this.targetY[keys[pos].index] = pos * ROW_H;
     }
   }
 

@@ -19,10 +19,10 @@ No test framework is configured — there are no tests.
 
 ### Scene Flow
 
-`main.ts` bootstraps a Pixi Application, then `Game.ts` manages navigation through four scenes in order:
+`main.ts` bootstraps a Pixi Application, then `Game.ts` manages navigation through three scenes in order:
 
 ```
-LobbyScene → RulesScene → TableSelectScene → GameScene
+LobbyScene → TableSelectScene → GameScene
 ```
 
 `Game.ts` is the sole orchestrator: it instantiates scenes, wires up callbacks between them, and handles resize events.
@@ -44,6 +44,7 @@ Stateless Pixi `Container` subclasses updated by `GameScene` each frame:
 - `PlayersPanel` — scrollable player list with smooth Y-lerp row reordering; sorts by cashout multiplier during a round
 - `PotDisplay` — pot total + crash history pills + cashout log
 - `ChatPanel` — bot reaction messages
+- `HeaderBar` — top bar (balance display, leave-table button)
 
 ### Configuration
 
