@@ -337,7 +337,7 @@ export class TapGameScene {
       this.setButtonLabel(`BET $${FIXED_BET}`, 0xffee88);
     } else if (this.balance >= FIXED_BET) {
       this.cashoutButton.showBetMode(FIXED_BET);
-      this.setButtonLabel(`BET $${FIXED_BET}`, 0xffee88);
+      this.setButtonLabel(`Tap to Bet $${FIXED_BET}`, 0xffee88);
     } else {
       this.cashoutButton.showNotInRound();
       this.setButtonLabel('', 0x888888);
@@ -349,7 +349,7 @@ export class TapGameScene {
     if (this.myBet) {
       this.cashoutButton.showTapMode();
       this.cashoutButton.setTapCount(this.myTapCount, MAX_TAPS);
-      this.setButtonLabel('TAP!', 0xff8800);
+      this.updateTapButtonLabel();
     } else if (this.balance >= FIXED_BET) {
       if (this.playerPendingNextRound) {
         this.cashoutButton.showNextRoundQueued(FIXED_BET);
@@ -375,9 +375,14 @@ export class TapGameScene {
     } else if (this.myTapCount > 0 && this.balance < FIXED_BET) {
       this.cashoutButton.showTapDisabled();
       this.setButtonLabel('NO FUNDS', 0xff4444);
+    } else if (this.myTapCount === 0) {
+      this.setButtonLabel('Tap to Collect the Pot', 0xff8800);
     } else {
-      const label = this.myTapCount > 0 ? 'BET MORE TO WIN' : 'TAP TO BET';
-      this.setButtonLabel(label, this.myTapCount > 0 ? 0xffdd00 : 0xff8800);
+      const remaining = MAX_TAPS - this.myTapCount;
+      this.setButtonLabel(
+        `Buy Additional Chance\nCollect the Pot for $${FIXED_BET} \u2022 ${remaining}/${MAX_TAPS}`,
+        0xffdd00, 9,
+      );
     }
   }
 
@@ -618,9 +623,10 @@ export class TapGameScene {
 
   onResize(_w: number, _h: number) { this.layout(); }
 
-  private setButtonLabel(text: string, fill: number) {
+  private setButtonLabel(text: string, fill: number, fontSize = 11) {
     this.buttonLabel.text = text;
     (this.buttonLabel.style as TextStyle).fill = fill;
+    (this.buttonLabel.style as TextStyle).fontSize = fontSize;
   }
 
   private updateBalanceText() {
