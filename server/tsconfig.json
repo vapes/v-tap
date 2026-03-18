@@ -5,11 +5,12 @@
     "moduleResolution": "bundler",
     "strict": true,
     "esModuleInterop": true,
-    "resolveJsonModule": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "outDir": "dist",
+    "rootDir": "..",
+    "declaration": false,
     "sourceMap": true
   },
-  "include": ["src", "shared"]
+  "include": ["src/**/*", "../shared/**/*"]
 }

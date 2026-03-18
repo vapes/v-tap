@@ -1,12 +1,8 @@
 import { Container, Graphics, Text, TextStyle, Rectangle } from 'pixi.js';
-import { AnimalType } from '../logic/BotPlayers';
 
 export interface PlayerRowData {
   name:      string;
-  animalType: AnimalType;
   neonColor: number;
-  bet:       number;
-  balance:   number;
   isPlayer:  boolean;
   status:    null | number | 'busted' | 'out';
   inRound:   boolean;

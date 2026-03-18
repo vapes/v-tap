@@ -4,6 +4,11 @@ export default defineConfig({
   base: './',
   server: {
     port: 3000,
-    open: true,
+    proxy: {
+      '/ws': {
+        target: 'ws://localhost:8080',
+        ws: true,
+      },
+    },
   },
 });

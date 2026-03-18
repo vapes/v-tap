@@ -1,21 +1,25 @@
 import { Application, Container, Text, TextStyle, Graphics } from 'pixi.js';
+import type { SocketClient } from '../network/SocketClient';
 
 export class LobbyScene {
   private app: Application;
   private container: Container;
-  private onReady: (() => void) | null = null;
+  private socket: SocketClient;
+  private onReady: ((nickname: string) => void) | null = null;
+  private inputEl: HTMLInputElement | null = null;
+  private tickerFn: (() => void) | null = null;
 
-  constructor(app: Application) {
+  constructor(app: Application, socket: SocketClient) {
     this.app = app;
+    this.socket = socket;
     this.container = new Container();
   }
 
-  show(onReady: () => void) {
+  show(onReady: (nickname: string) => void) {
     this.onReady = onReady;
     const w = this.app.screen.width;
     const h = this.app.screen.height;
 
-    // Dark background
     const bg = new Graphics();
     bg.beginFill(0x0a0a1a);
     bg.drawRect(0, 0, w, h);
@@ -25,21 +29,16 @@ export class LobbyScene {
     // Paw logo
     const pawLogo = new Graphics();
     const logoR = 64;
-    // Circle background
     pawLogo.beginFill(0x00cc66, 0.85);
     pawLogo.drawCircle(0, 0, logoR);
     pawLogo.endFill();
-    // Highlight
     pawLogo.beginFill(0xffffff, 0.1);
     pawLogo.drawEllipse(0, -logoR * 0.25, logoR * 0.6, logoR * 0.35);
     pawLogo.endFill();
-    // Border
     pawLogo.lineStyle(2, 0x00cc66, 0.6);
     pawLogo.drawCircle(0, 0, logoR);
-    // Glow ring
     pawLogo.lineStyle(2, 0x00ff88, 0.4);
     pawLogo.drawCircle(0, 0, logoR + 4);
-    // Paw
     const s = logoR * 0.55;
     pawLogo.lineStyle(0);
     pawLogo.beginFill(0xffffff, 0.9);
@@ -57,11 +56,11 @@ export class LobbyScene {
       pawLogo.endFill();
     }
     pawLogo.x = w / 2;
-    pawLogo.y = h / 2 - 100;
+    pawLogo.y = h / 2 - 120;
     this.container.addChild(pawLogo);
 
     // Title
-    const titleStyle = new TextStyle({
+    const title = new Text('LAST TAP', new TextStyle({
       fontFamily: '"Courier New", monospace',
       fontSize: 42,
       fontWeight: 'bold',
@@ -70,60 +69,102 @@ export class LobbyScene {
       dropShadowColor: 0x00ff88,
       dropShadowBlur: 20,
       dropShadowDistance: 0,
-    });
-    const title = new Text('LAST TAP', titleStyle);
+    }));
     title.anchor.set(0.5);
     title.x = w / 2;
-    title.y = h / 2 + 10;
+    title.y = h / 2 - 20;
     this.container.addChild(title);
 
     // Subtitle
-    const subStyle = new TextStyle({
+    const sub = new Text('Cash out last. Win the pot.', new TextStyle({
       fontFamily: '"Courier New", monospace',
       fontSize: 14,
       fill: 0x888888,
-    });
-    const sub = new Text('Cash out last. Win the pot.', subStyle);
+    }));
     sub.anchor.set(0.5);
     sub.x = w / 2;
-    sub.y = h / 2 + 50;
+    sub.y = h / 2 + 20;
     this.container.addChild(sub);
 
-    // Start prompt
-    const startStyle = new TextStyle({
+    // Nickname label
+    const nickLabel = new Text('Enter your nickname:', new TextStyle({
+      fontFamily: '"Courier New", monospace',
+      fontSize: 13,
+      fill: 0xaaaaaa,
+    }));
+    nickLabel.anchor.set(0.5);
+    nickLabel.x = w / 2;
+    nickLabel.y = h / 2 + 60;
+    this.container.addChild(nickLabel);
+
+    // HTML input overlay for nickname
+    this.inputEl = document.createElement('input');
+    this.inputEl.type = 'text';
+    this.inputEl.maxLength = 16;
+    this.inputEl.placeholder = 'YourNickname';
+    this.inputEl.autocomplete = 'off';
+    Object.assign(this.inputEl.style, {
+      position: 'fixed',
+      left: '50%',
+      top: `${h / 2 + 80}px`,
+      transform: 'translateX(-50%)',
+      width: '200px',
+      padding: '10px 14px',
+      fontSize: '18px',
+      fontFamily: '"Courier New", monospace',
+      background: '#111122',
+      border: '2px solid #00ff88',
+      borderRadius: '8px',
+      color: '#00ff88',
+      textAlign: 'center',
+      outline: 'none',
+      zIndex: '1000',
+    });
+    this.inputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this.submit();
+    });
+    document.body.appendChild(this.inputEl);
+    this.inputEl.focus();
+
+    // Start button
+    const startText = new Text('[ Tap to play ]', new TextStyle({
       fontFamily: '"Courier New", monospace',
       fontSize: 18,
       fill: 0xffdd00,
-    });
-    const startText = new Text('[ Tap to start ]', startStyle);
+    }));
     startText.anchor.set(0.5);
     startText.x = w / 2;
-    startText.y = h / 2 + 110;
+    startText.y = h / 2 + 140;
     this.container.addChild(startText);
 
-    // Blink animation
     let phase = 0;
-    const ticker = () => {
+    this.tickerFn = () => {
       phase += 0.05;
       startText.alpha = 0.4 + Math.sin(phase) * 0.6;
     };
-    this.app.ticker.add(ticker);
-
+    this.app.ticker.add(this.tickerFn);
     this.app.stage.addChild(this.container);
 
-    // Click to start
     this.container.eventMode = 'static';
-    this.container.on('pointerdown', () => {
-      this.app.ticker.remove(ticker);
-      this.onReady?.();
-    });
+    this.container.on('pointerdown', () => this.submit());
+  }
+
+  private submit() {
+    const nick = this.inputEl?.value.trim() || '';
+    this.onReady?.(nick);
   }
 
   hide() {
+    if (this.tickerFn) {
+      this.app.ticker.remove(this.tickerFn);
+      this.tickerFn = null;
+    }
+    if (this.inputEl) {
+      this.inputEl.remove();
+      this.inputEl = null;
+    }
     this.app.stage.removeChild(this.container);
   }
 
-  onResize(_width: number, _height: number) {
-    // Lobby is transient, skip complex relayout
-  }
+  onResize(_width: number, _height: number) {}
 }

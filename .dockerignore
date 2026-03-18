@@ -1,0 +1,9 @@
+node_modules
+dist
+server/dist
+server/node_modules
+.git
+.github
+.vscode
+.claude
+*.md

@@ -5,64 +5,117 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-npm run dev       # Start dev server at http://localhost:3000
-npm run build     # Type-check and build to dist/
-npm run preview   # Preview the production build
-npm run rtp       # Run RTP probability calculator (scripts/rtp-calculator.js)
+npm run dev          # Start Vite dev server at http://localhost:3000 (proxies /ws to server)
+npm run dev:server   # Start WebSocket server at :8080 (run alongside dev)
+npm run build        # Type-check client and build to dist/
+npm run build:server # Bundle server with esbuild to server/dist/
+npm run build:all    # Build both client and server
+npm run start        # Run production server (serves client + WebSocket)
+npm run rtp          # Run RTP probability calculator (scripts/rtp-calculator.js)
 ```
 
 No test framework is configured — there are no tests.
 
+### Development
+
+Run two terminals:
+1. `npm run dev:server` — starts the authoritative game server on port 8080
+2. `npm run dev` — starts Vite on port 3000 with HMR; proxies `/ws` to the server
+
+### Deployment (Fly.io)
+
+- `Dockerfile` builds both client and server into a single image
+- `fly.toml` configures the Fly.io machine (region `waw`, auto-stop)
+- `.github/workflows/deploy.yml` deploys on push to `main` via `flyctl deploy`
+- Requires `FLY_API_TOKEN` secret in GitHub repo settings
+
 ## Architecture
 
-**Last Tap** is a multiplier crash-game simulator built with Pixi.js (WebGL 2D renderer) and TypeScript.
+**Last Tap** is a real-time multiplayer crash/tap game. The server is authoritative; clients render state received over WebSocket.
+
+### Project Structure
+
+```
+v-tap/
+├── shared/            # Shared TypeScript types (imported by both client and server)
+│   └── protocol.ts    # ClientMessage / ServerMessage discriminated unions, PlayerInfo
+├── server/            # Node.js authoritative game server
+│   └── src/
+│       ├── index.ts       # Express (static files) + WebSocket upgrade on /ws
+│       ├── RoomManager.ts # Routes players to CrashRoom or TapRoom
+│       ├── CrashRoom.ts   # Server-side crash game state machine
+│       ├── TapRoom.ts     # Server-side tap game state machine
+│       ├── Player.ts      # Player state (id, nickname, balance, ws)
+│       └── config.ts      # Game parameters (house edge, timing, etc.)
+├── src/               # Pixi.js client
+│   ├── main.ts        # Bootstraps Pixi Application + Game
+│   ├── Game.ts        # Scene orchestrator, owns SocketClient
+│   ├── network/
+│   │   └── SocketClient.ts  # WebSocket client, event emitter for server messages
+│   ├── scenes/
+│   │   ├── LobbyScene.ts          # Nickname input + connect
+│   │   ├── GameModeSelectScene.ts  # Choose crash or tap
+│   │   ├── GameScene.ts           # Crash mode (server-driven)
+│   │   └── TapGameScene.ts        # Tap mode (server-driven)
+│   └── ui/            # Stateless Pixi display components
+├── Dockerfile         # Multi-stage: build client+server, slim runtime
+├── fly.toml           # Fly.io configuration
+└── .github/workflows/deploy.yml
+```
 
 ### Scene Flow
 
-`main.ts` bootstraps a Pixi Application, then `Game.ts` manages navigation:
-
 ```
-LobbyScene → GameModeSelectScene → GameScene (crash mode)
-                                 → TapGameScene (tap mode)
+LobbyScene (nickname) → WebSocket connect → setNickname → welcome
+  → GameModeSelectScene → joinRoom("crash") → GameScene
+                        → joinRoom("tap")   → TapGameScene
 ```
 
-`Game.ts` is the sole orchestrator: it instantiates scenes, wires up callbacks between them, and handles resize events.
+### Server-Client Protocol
+
+All messages are JSON over WebSocket (`/ws` endpoint).
+
+**Client → Server:** `setNickname`, `joinRoom`, `leaveRoom`, `placeBet`, `cashout`, `tap`
+
+**Server → Client:** `welcome`, `roomState` (full snapshot on join), `phaseChange`, `betPlaced`, `playerCashedOut`, `playerTapped`, `tick` (20Hz state sync), `roundResult`, `balanceUpdate`, `playerJoined`, `playerLeft`, `error`
+
+Types defined in `shared/protocol.ts`.
 
 ### Game Modes
 
-There are two independent game modes, each with its own logic and scene:
+**Crash mode** (`CrashRoom` on server, `GameScene` on client):
+- Server generates crash point via inverse CDF: `(1 - houseEdge) / (1 - r)`
+- Server ticks at 20Hz, broadcasts multiplier `e^(elapsed × growthRate)`
+- Client interpolates between ticks using known `growthRate` for 60fps display
+- Players cash out by sending `cashout`; server validates and broadcasts
+- Last cashout wins the pot; solo rounds (1 player) skip pot mechanics
 
-**Crash mode** (`GameScene` + `RoundManager` + `BotPlayers`):
-- Multiplier grows until a hidden crash point; players cash out before it crashes
-- `RoundManager.ts` — state machine with states `WAITING | RUNNING | CRASHED | RESULT`
-- Crash point via inverse CDF: `P(crash > m) = (1 - houseEdge) / m`, giving 99% RTP
-- Multiplier grows exponentially: `e^(elapsed × growthRate)` where `growthRate` is randomized per round from `[0.15, 0.275]`
-- `BotPlayers.ts` — 20–50 bots with personalities (`conservative`, `moderate`, `aggressive`, `degen`) that determine cashout range; 15% chance to go "greedy"; 20–70% participate per round
+**Tap mode** (`TapRoom` on server, `TapGameScene` on client):
+- Server generates hidden duration via inverse CDF: `timerMin / (1 - r)`
+- Players tap by sending `tap`; first tap free, subsequent cost `fixedBet`
+- Last tapper when time expires wins `pot × (1 - casinoCut)`
 
-**Tap mode** (`TapGameScene` + `TapRoundManager` + `TapBotPlayers`):
-- A hidden timer runs; whoever taps last before time expires wins the pot
-- `TapRoundManager.ts` — state machine with states `BETTING | RUNNING | ENDED | RESULT`
-- Timer duration drawn from same inverse-CDF shape: `P(t > x) = timerMin / x`, clamped to `[timerMin, timerMax]`
-- First tap per participant is free; subsequent taps cost `tableBet` and are added to the pot (up to `maxTaps`)
-- Winner receives `pot × (1 - casinoCut)`; `lastTapper` at round end wins
+### State Machine Phases
+
+- **Crash:** `BETTING → RUNNING → CRASHED → RESULT → BETTING`
+- **Tap:** `BETTING → RUNNING → ENDED → RESULT → BETTING`
+
+Server uses `Date.now()` for accurate timing; `setInterval` at 50ms for the game loop tick.
 
 ### UI Layer (`src/ui/`)
 
-Stateless Pixi `Container` subclasses updated by `GameScene` each frame:
-- `MultiplierText` — live multiplier display
-- `CashoutButton` — main player interaction; color shifts green→yellow→orange with multiplier
-- `PlayersPanel` — scrollable player list with smooth Y-lerp row reordering; sorts by cashout multiplier during a round
-- `PotDisplay` — pot total + crash history pills + cashout log
-- `ChatPanel` — bot reaction messages
-- `HeaderBar` — top bar (balance display, leave-table button)
-
-### Configuration
-
-All gameplay math lives in **`src/math-config.json`** (imported as a module). Changing values here (house edge, growth rate, timing, bot personalities) affects everything without touching logic code.
+Stateless Pixi `Container` subclasses updated by scenes each frame:
+- `MultiplierText` — live multiplier or elapsed time display
+- `CashoutButton` — main player interaction; color shifts with multiplier/time
+- `PlayersPanel` — scrollable player list with smooth Y-lerp row reordering
+- `PotDisplay` — pot total + flash animation
+- `HeaderBar` — top bar with back button + round history pills
 
 ### Key Design Patterns
 
-- **No external state library** — `RoundManager` holds all mutable state; `GameScene` reads it each `ticker` tick.
-- **No image assets** — all visuals are procedural Pixi Graphics primitives (circles, arcs, rectangles).
-- **Frame-loop driven** — `GameScene.ts` registers a single Pixi `Ticker` callback that updates all UI components and advances game state every frame.
-- **Pixi Graphics arc rule** — always call `moveTo(startX, startY)` before `arc()` to prevent Pixi from drawing an implicit connecting line from the previous path position. Forgetting this creates a visible seam/line on arc elements like the betting progress ring.
+- **Server-authoritative** — all game state (crash point, balances, pot, winner) computed on server; clients are renderers.
+- **No image assets** — all visuals are procedural Pixi Graphics primitives.
+- **Frame-loop driven** — scenes register Pixi `Ticker` callbacks that read server state and update UI.
+- **Client interpolation** — crash multiplier is extrapolated locally between server ticks for smooth 60fps.
+- **Event-driven networking** — `SocketClient` uses an event emitter pattern; scenes subscribe to specific message types.
+- **Pixi Graphics arc rule** — always call `moveTo(startX, startY)` before `arc()` to prevent Pixi from drawing an implicit connecting line.

@@ -1,94 +1,106 @@
 import { Application, Container, Graphics, Text, TextStyle } from 'pixi.js';
-import { RoundManager, GameState } from '../logic/RoundManager';
-import { BotPlayers } from '../logic/BotPlayers';
+import type { SocketClient } from '../network/SocketClient';
+import type {
+  ServerMessage, RoomStateMsg, PhaseChangeMsg, BetPlacedMsg,
+  PlayerCashedOutMsg, TickMsg, RoundResultMsg, BalanceUpdateMsg,
+  PlayerJoinedMsg, PlayerLeftMsg, PlayerInfo,
+} from '../../shared/protocol';
 import { MultiplierText } from '../ui/MultiplierText';
 import { CashoutButton } from '../ui/CashoutButton';
 import { PotDisplay } from '../ui/PotDisplay';
-import { PlayersPanel } from '../ui/PlayersPanel';
+import { PlayersPanel, PlayerRowData } from '../ui/PlayersPanel';
 import { HeaderBar } from '../ui/HeaderBar';
-import mathConfig from '../math-config.json';
 
 function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
 function easeOut(t: number) { return 1 - Math.pow(1 - t, 3); }
 
-/** Index 0 = player (YOU), indices 1..N = bots */
-const PLAYER_ROW = 0;
+const NEON_COLORS = [
+  0xff00ff, 0x00ffff, 0xff8800, 0x00ff88, 0x4488ff,
+  0xffff00, 0xff4466, 0xbb88ff, 0xff6644, 0x44ffbb,
+];
+
+function nickColor(name: string): number {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = ((h << 5) - h + name.charCodeAt(i)) | 0;
+  return NEON_COLORS[Math.abs(h) % NEON_COLORS.length];
+}
+
+type Phase = 'BETTING' | 'RUNNING' | 'CRASHED' | 'RESULT' | 'IDLE';
 
 export class GameScene {
-  private app:       Application;
+  private app: Application;
   private container: Container;
+  private socket: SocketClient;
 
-  private roundManager: RoundManager;
-  private botPlayers:   BotPlayers;
-
-  private headerBar:      HeaderBar;
+  private headerBar: HeaderBar;
   private multiplierText: MultiplierText;
-  private cashoutButton:  CashoutButton;
-  private potDisplay:     PotDisplay;
-  private playersPanel:   PlayersPanel;
-  private crashFlash:     Graphics;
-  private balanceText:    Text;
-  private buttonLabel:    Text;
+  private cashoutButton: CashoutButton;
+  private potDisplay: PotDisplay;
+  private playersPanel: PlayersPanel;
+  private crashFlash: Graphics;
+  private balanceText: Text;
+  private buttonLabel: Text;
 
   // Win animation
-  private winFlash:        Graphics;
+  private winFlash: Graphics;
   private winAnnouncement: Text | null = null;
-  private winFlyLabel:     Text | null = null;
-  private winFlyFrom       = { x: 0, y: 0 };
-  private winFlyTo         = { x: 0, y: 0 };
-  private winFlyT          = 0;
-  private winFlashAlpha    = 0;
-  private winFlashPos      = { x: 0, y: 0 };
-  private winName          = '';
-  private winCashoutAmount = 0;
-  private winPotAmount     = 0;
-  private winPotMerged     = false;
-  private winColor         = 0xffdd00;
+  private winFlyLabel: Text | null = null;
+  private winFlyFrom = { x: 0, y: 0 };
+  private winFlyTo = { x: 0, y: 0 };
+  private winFlyT = 0;
+  private winFlashAlpha = 0;
+  private winFlashPos = { x: 0, y: 0 };
+  private winPotMerged = false;
 
-  // Player cashout fly animation
+  // Player cashout fly
   private playerWinFlyLabel: Text | null = null;
-  private playerWinFlyFrom  = { x: 0, y: 0 };
-  private playerWinFlyTo    = { x: 0, y: 0 };
-  private playerWinFlyT     = 0;
-  private playerWinAmount   = 0;
+  private playerWinFlyFrom = { x: 0, y: 0 };
+  private playerWinFlyTo = { x: 0, y: 0 };
+  private playerWinFlyT = 0;
 
-  private bettingTimer          = 0;
-  private resultTimer           = 0;
+  // Game state (driven by server)
+  private phase: Phase = 'IDLE';
+  private multiplier = 1.0;
+  private growthRate = 0.2;
+  private localElapsed = 0;
+  private pot = 0;
+  private balance = 0;
+  private myBet = false;
+  private myCashedOut = false;
+  private bettingTimeLeft = 0;
+  private history: number[] = [];
+  private soloRound = false;
+
+  private players = new Map<string, PlayerInfo>();
+  private playerOrder: string[] = [];
   private playerPendingNextRound = false;
-
-  private readonly BETTING_DELAY = mathConfig.timing.bettingDelaySec;
-  private readonly RESULT_DELAY  = mathConfig.timing.resultDelaySec;
-  private readonly CRASH_DISPLAY = mathConfig.timing.crashDisplaySec;
+  private resultTimer = 0;
 
   onLeaveTable: (() => void) | null = null;
 
-  constructor(app: Application) {
-    this.app       = app;
+  // Event handler references for cleanup
+  private handlers: Array<[string, (msg: ServerMessage) => void]> = [];
+
+  constructor(app: Application, socket: SocketClient) {
+    this.app = app;
+    this.socket = socket;
     this.container = new Container();
 
-    this.roundManager = new RoundManager();
-    this.botPlayers   = new BotPlayers(this.roundManager);
-
-    this.headerBar      = new HeaderBar();
+    this.headerBar = new HeaderBar();
     this.multiplierText = new MultiplierText();
-    this.cashoutButton  = new CashoutButton();
-    this.potDisplay     = new PotDisplay();
-    this.playersPanel   = new PlayersPanel();
+    this.cashoutButton = new CashoutButton();
+    this.potDisplay = new PotDisplay();
+    this.playersPanel = new PlayersPanel();
 
     this.buttonLabel = new Text('', new TextStyle({
-      fontFamily: '"Courier New", monospace',
-      fontSize:   11,
-      fontWeight: 'bold',
-      fill:       0x888888,
-      align:      'center',
+      fontFamily: '"Courier New", monospace', fontSize: 11,
+      fontWeight: 'bold', fill: 0x888888, align: 'center',
     }));
     this.buttonLabel.anchor.set(0.5, 0);
 
     this.balanceText = new Text('', new TextStyle({
-      fontFamily: '"Courier New", monospace',
-      fontSize:   13,
-      fontWeight: 'bold',
-      fill:       0x00ff88,
+      fontFamily: '"Courier New", monospace', fontSize: 13,
+      fontWeight: 'bold', fill: 0x00ff88,
     }));
     this.balanceText.anchor.set(0.5, 0);
 
@@ -100,21 +112,12 @@ export class GameScene {
 
     this.winFlash = new Graphics();
 
-    this.headerBar.onBack = () => this.onLeaveTable?.();
-
-    this.botPlayers.onBotBetPlaced = (botIndex) => {
-      this.playersPanel.setPlayerBetting(botIndex + 1, true);
-      this.potDisplay.setPot(this.roundManager.potValue);
-      this.potDisplay.flash();
+    this.headerBar.onBack = () => {
+      this.socket.send({ type: 'leaveRoom' });
+      this.onLeaveTable?.();
     };
-
-    this.botPlayers.onBotCashout = (botIndex, _name, mult) => {
-      this.playersPanel.updatePlayerStatus(botIndex + 1, mult);
-    };
-
     this.cashoutButton.onTap = () => this.handleButtonTap();
 
-    // Z-order: header always on top, win elements just below it
     this.container.addChild(this.playersPanel);
     this.container.addChild(this.potDisplay);
     this.container.addChild(this.multiplierText);
@@ -126,87 +129,332 @@ export class GameScene {
     this.container.addChild(this.headerBar);
   }
 
-  getRoundManager(): RoundManager {
-    return this.roundManager;
-  }
-
-  show(betAmount: number) {
-    this.roundManager.setTableBet(betAmount);
+  show() {
+    this.balance = this.socket.balance;
     this.app.stage.addChild(this.container);
-    this.rebuildPlayerList();
     this.layout();
     this.app.ticker.add(this.update, this);
-    this.startBettingPhase();
+    this.bindEvents();
+    this.socket.send({ type: 'joinRoom', mode: 'crash' });
   }
 
   hide() {
     this.app.ticker.remove(this.update, this);
+    this.unbindEvents();
     this.clearPlayerWinFly();
-    this.roundManager.resetForLobby();
-    this.playerPendingNextRound = false;
     this.clearWinAnimation();
+    this.playerPendingNextRound = false;
+    this.phase = 'IDLE';
     this.app.stage.removeChild(this.container);
   }
 
-  private rebuildPlayerList() {
-    const playerRow = {
-      name:      'YOU',
-      animalType: 'cat' as const,
-      neonColor: 0x00ff88,
-      bet:       0,
-      balance:   this.roundManager.playerBalance,
-      isPlayer:  true,
-      status:    null as null,
-      inRound:   false,
+  // ── Server event binding ──
+
+  private bindEvents() {
+    const bind = (type: string, fn: (msg: ServerMessage) => void) => {
+      this.socket.on(type, fn);
+      this.handlers.push([type, fn]);
     };
-    this.playersPanel.setPlayers([playerRow, ...this.botPlayers.getBotRows()]);
+    bind('roomState', (m) => this.onRoomState(m as RoomStateMsg));
+    bind('phaseChange', (m) => this.onPhaseChange(m as PhaseChangeMsg));
+    bind('betPlaced', (m) => this.onBetPlaced(m as BetPlacedMsg));
+    bind('playerCashedOut', (m) => this.onPlayerCashedOut(m as PlayerCashedOutMsg));
+    bind('tick', (m) => this.onTick(m as TickMsg));
+    bind('roundResult', (m) => this.onRoundResult(m as RoundResultMsg));
+    bind('balanceUpdate', (m) => this.onBalanceUpdate(m as BalanceUpdateMsg));
+    bind('playerJoined', (m) => this.onPlayerJoined(m as PlayerJoinedMsg));
+    bind('playerLeft', (m) => this.onPlayerLeft(m as PlayerLeftMsg));
   }
 
-  // ─── State handlers ────────────────────────────────────────────
+  private unbindEvents() {
+    for (const [type, fn] of this.handlers) this.socket.off(type, fn);
+    this.handlers = [];
+  }
+
+  // ── Server event handlers ──
+
+  private onRoomState(msg: RoomStateMsg) {
+    this.phase = msg.phase as Phase;
+    this.pot = msg.pot;
+    this.multiplier = msg.multiplier ?? 1;
+    this.growthRate = msg.growthRate ?? 0.2;
+    this.localElapsed = msg.elapsed ?? 0;
+    this.history = msg.history;
+
+    this.players.clear();
+    this.playerOrder = [];
+    for (const p of msg.players) {
+      this.players.set(p.id, p);
+      this.playerOrder.push(p.id);
+    }
+
+    this.myBet = false;
+    this.myCashedOut = false;
+    const myInfo = this.players.get(this.socket.playerId);
+    if (myInfo?.inRound) {
+      this.myBet = true;
+      this.myCashedOut = !!myInfo.cashedOut;
+    }
+
+    this.soloRound = this.countBettors() <= 1;
+    this.rebuildPlayerList();
+    this.potDisplay.setPot(this.pot);
+    this.headerBar.updateHistory(this.history);
+    this.updateBalanceText();
+
+    if (this.phase === 'BETTING') {
+      this.bettingTimeLeft = msg.bettingTimeLeft ?? 0;
+      this.enterBettingUI();
+    } else if (this.phase === 'RUNNING') {
+      this.enterRunningUI();
+    }
+  }
+
+  private onPhaseChange(msg: PhaseChangeMsg) {
+    this.phase = msg.phase as Phase;
+
+    if (msg.phase === 'BETTING') {
+      this.bettingTimeLeft = msg.bettingTimeLeft ?? 10;
+      this.myBet = false;
+      this.myCashedOut = false;
+      this.soloRound = false;
+      this.clearWinAnimation();
+      this.clearPlayerWinFly();
+
+      for (const [, p] of this.players) { p.inRound = false; p.cashedOut = false; p.cashoutMultiplier = undefined; }
+      this.rebuildPlayerList();
+      this.playersPanel.resetForBetting();
+      this.potDisplay.setPot(this.pot);
+      this.headerBar.updateHistory(this.history);
+      this.multiplierText.scale.set(1);
+
+      if (this.playerPendingNextRound && this.balance >= 10) {
+        this.socket.send({ type: 'placeBet' });
+        this.playerPendingNextRound = false;
+      }
+      this.enterBettingUI();
+    } else if (msg.phase === 'RUNNING') {
+      this.growthRate = msg.growthRate ?? 0.2;
+      this.localElapsed = 0;
+      this.multiplier = 1.0;
+      this.multiplierText.reset();
+      this.crashFlash.alpha = 0;
+      this.soloRound = this.countBettors() <= 1;
+      this.playersPanel.showOnlyBettingPlayers();
+      this.enterRunningUI();
+    } else if (msg.phase === 'CRASHED') {
+      this.multiplier = msg.crashPoint ?? this.multiplier;
+      this.history.push(parseFloat(this.multiplier.toFixed(2)));
+      this.crashFlash.alpha = 0.6;
+      this.multiplierText.showCrash(this.multiplier);
+      this.resultTimer = 1.5;
+
+      if (this.myBet && !this.myCashedOut) {
+        this.cashoutButton.showCrashed();
+        this.setButtonLabel('BUST', 0xff4444);
+        this.updateMyPlayerStatus('busted');
+      }
+
+      for (const [id, p] of this.players) {
+        if (p.inRound && !p.cashedOut && id !== this.socket.playerId) {
+          this.updatePlayerStatusById(id, 'busted');
+        }
+      }
+    }
+  }
+
+  private onBetPlaced(msg: BetPlacedMsg) {
+    this.pot = msg.pot;
+    this.potDisplay.setPot(this.pot);
+    this.potDisplay.flash();
+
+    const p = this.players.get(msg.playerId);
+    if (p) p.inRound = true;
+
+    if (msg.playerId === this.socket.playerId) {
+      this.myBet = true;
+      this.balance = this.socket.balance;
+      this.cashoutButton.showBetPlaced();
+      this.setButtonLabel(`BET $10`, 0xffee88);
+      this.updateBalanceText();
+    }
+
+    const idx = this.playerOrder.indexOf(msg.playerId);
+    if (idx >= 0) this.playersPanel.setPlayerBetting(idx, true);
+  }
+
+  private onPlayerCashedOut(msg: PlayerCashedOutMsg) {
+    const p = this.players.get(msg.playerId);
+    if (p) { p.cashedOut = true; p.cashoutMultiplier = msg.multiplier; p.cashoutAmount = msg.cashoutAmount; }
+
+    const idx = this.playerOrder.indexOf(msg.playerId);
+    if (idx >= 0) this.playersPanel.updatePlayerStatus(idx, msg.multiplier);
+
+    if (msg.playerId === this.socket.playerId) {
+      this.myCashedOut = true;
+      this.balance = this.socket.balance;
+      this.cashoutButton.showCashedOut(msg.multiplier);
+      this.setButtonLabel(`${msg.multiplier.toFixed(2)}×`, 0x00ff88);
+      this.updateBalanceText();
+    }
+  }
+
+  private onTick(msg: TickMsg) {
+    if (this.phase !== 'RUNNING') return;
+    this.localElapsed = msg.elapsed;
+    this.multiplier = msg.multiplier ?? this.multiplier;
+    this.pot = msg.pot;
+    this.potDisplay.setPot(this.pot);
+  }
+
+  private onRoundResult(msg: RoundResultMsg) {
+    this.phase = 'RESULT';
+    this.balance = this.socket.balance;
+    this.updateBalanceText();
+    this.potDisplay.setPot(0);
+    this.resultTimer = 3;
+
+    if (msg.winnerId && !this.soloRound) {
+      const isMe = msg.winnerId === this.socket.playerId;
+      const total = msg.winnerCashoutAmount + msg.potWon;
+      this.startWinDisplay(msg.winnerName ?? '???', msg.winnerCashoutAmount, msg.potWon, isMe);
+    }
+
+    if (this.myCashedOut) {
+      const myP = this.players.get(this.socket.playerId);
+      if (myP?.cashoutAmount) {
+        this.startPlayerWinFly(myP.cashoutAmount);
+      }
+    }
+  }
+
+  private onBalanceUpdate(msg: BalanceUpdateMsg) {
+    this.balance = msg.balance;
+    this.updateBalanceText();
+  }
+
+  private onPlayerJoined(msg: PlayerJoinedMsg) {
+    this.players.set(msg.player.id, msg.player);
+    this.playerOrder.push(msg.player.id);
+    this.rebuildPlayerList();
+  }
+
+  private onPlayerLeft(msg: PlayerLeftMsg) {
+    this.players.delete(msg.playerId);
+    this.playerOrder = this.playerOrder.filter(id => id !== msg.playerId);
+    this.rebuildPlayerList();
+  }
+
+  // ── UI helpers ──
+
+  private enterBettingUI() {
+    if (this.myBet) {
+      this.cashoutButton.showBetPlaced();
+      this.setButtonLabel(`BET $10`, 0xffee88);
+    } else if (this.balance >= 10) {
+      this.cashoutButton.showBetMode(10);
+      this.setButtonLabel(`BET $10`, 0xffee88);
+    } else {
+      this.cashoutButton.showNotInRound();
+      this.setButtonLabel('', 0x888888);
+    }
+    this.updateBalanceText();
+  }
+
+  private enterRunningUI() {
+    if (this.myBet) {
+      if (this.myCashedOut) {
+        this.cashoutButton.showCashedOut(this.multiplier);
+      } else {
+        this.cashoutButton.showCashoutMode();
+        this.setButtonLabel('CASH OUT', 0x888888);
+      }
+    } else if (this.balance >= 10) {
+      if (this.playerPendingNextRound) {
+        this.cashoutButton.showNextRoundQueued(10);
+        this.setButtonLabel('QUEUED $10\nTAP TO CANCEL', 0x88ccff);
+      } else {
+        this.cashoutButton.showNextRoundMode(10);
+        this.setButtonLabel('BET NEXT $10', 0x88aadd);
+      }
+    } else {
+      this.cashoutButton.showNotInRound();
+      this.setButtonLabel('', 0x888888);
+    }
+    this.updateBalanceText();
+  }
+
+  private countBettors(): number {
+    let n = 0;
+    for (const [, p] of this.players) if (p.inRound) n++;
+    return n;
+  }
+
+  private rebuildPlayerList() {
+    const rows: PlayerRowData[] = this.playerOrder.map(id => {
+      const p = this.players.get(id)!;
+      const isMe = id === this.socket.playerId;
+      return {
+        name: isMe ? 'YOU' : p.nickname,
+        neonColor: isMe ? 0x00ff88 : nickColor(p.nickname),
+        isPlayer: isMe,
+        status: null,
+        inRound: p.inRound,
+      };
+    });
+    this.playersPanel.setPlayers(rows);
+    this.layoutPlayersPanel();
+  }
+
+  private updateMyPlayerStatus(status: null | number | 'busted' | 'out') {
+    const idx = this.playerOrder.indexOf(this.socket.playerId);
+    if (idx >= 0) this.playersPanel.updatePlayerStatus(idx, status);
+  }
+
+  private updatePlayerStatusById(id: string, status: null | number | 'busted' | 'out') {
+    const idx = this.playerOrder.indexOf(id);
+    if (idx >= 0) this.playersPanel.updatePlayerStatus(idx, status);
+  }
+
+  // ── Frame update ──
 
   private update() {
     const dt = this.app.ticker.deltaMS / 1000;
     this.potDisplay.animate(dt);
-    switch (this.roundManager.state) {
-      case GameState.BETTING:  this.updateBetting(dt);  break;
-      case GameState.RUNNING:  this.updateRunning(dt);  break;
-      case GameState.CRASHED:  this.updateCrashed(dt);  break;
-      case GameState.RESULT:   this.updateResult(dt);   break;
+
+    switch (this.phase) {
+      case 'BETTING': this.updateBetting(dt); break;
+      case 'RUNNING': this.updateRunning(dt); break;
+      case 'CRASHED': this.updateCrashed(dt); break;
+      case 'RESULT': this.updateResult(dt); break;
     }
   }
 
   private updateBetting(dt: number) {
-    this.bettingTimer -= dt;
-    const remaining = Math.max(this.bettingTimer, 0);
-    this.multiplierText.showBetting(remaining, this.roundManager.playerInRound);
-    const elapsed = this.BETTING_DELAY - this.bettingTimer;
-    this.botPlayers.tickBetting(elapsed, this.roundManager.tableBet);
-    const progress = remaining / this.BETTING_DELAY;
+    this.bettingTimeLeft = Math.max(0, this.bettingTimeLeft - dt);
+    this.multiplierText.showBetting(this.bettingTimeLeft, this.myBet);
+    const progress = this.bettingTimeLeft / 10;
     this.cashoutButton.animateBetting(progress);
-    if (!this.roundManager.playerInRound) {
-      this.cashoutButton.setCountdown(Math.ceil(remaining));
+    if (!this.myBet) {
+      this.cashoutButton.setCountdown(Math.ceil(this.bettingTimeLeft));
       this.cashoutButton.pulseBetting(dt);
     }
-    if (this.bettingTimer <= 0) this.startRound();
   }
 
   private updateRunning(dt: number) {
-    const crashed = this.roundManager.update(dt);
-    this.botPlayers.update();
-    this.tickPlayerWinFly(dt);
+    this.localElapsed += dt;
+    this.multiplier = Math.exp(this.localElapsed * this.growthRate);
 
-    if (crashed) { this.onCrash(); return; }
-
-    this.multiplierText.setValue(this.roundManager.multiplier);
+    this.multiplierText.setValue(this.multiplier);
     this.multiplierText.animate(dt);
 
-    if (this.roundManager.playerInRound && !this.roundManager.playerCashedOut) {
-      this.cashoutButton.animate(dt, this.roundManager.multiplier);
+    if (this.myBet && !this.myCashedOut) {
+      this.cashoutButton.animate(dt, this.multiplier);
     }
 
-    this.playersPanel.sortForRound(this.roundManager.multiplier);
+    this.playersPanel.sortForRound(this.multiplier);
     this.playersPanel.animate(dt);
-
+    this.tickPlayerWinFly(dt);
   }
 
   private updateCrashed(dt: number) {
@@ -214,257 +462,60 @@ export class GameScene {
     this.playersPanel.animate(dt);
     this.tickPlayerWinFly(dt);
     this.tickWinAnimation(dt);
-    this.resultTimer -= dt;
-    if (this.resultTimer <= 0) {
-      this.roundManager.showResult();
-      this.showRoundResult();
-    }
   }
 
   private updateResult(dt: number) {
     this.tickPlayerWinFly(dt);
     this.tickWinAnimation(dt);
     this.resultTimer -= dt;
-    if (this.resultTimer <= 0) {
-      this.clearWinAnimation();
-      this.startBettingPhase();
+    if (this.resultTimer < 1.0 && this.winAnnouncement) {
+      this.winAnnouncement.alpha = Math.max(0, this.resultTimer);
     }
   }
 
-  // ─── Phase transitions ─────────────────────────────────────────
+  // ── Player action ──
 
-  private startBettingPhase() {
-    // Safety flush — apply any pending cashout that wasn't caught earlier
-    this.roundManager.applyPendingCashout();
-    this.clearPlayerWinFly();
-    this.roundManager.startBetting();
-    this.botPlayers.prepareBettingPhase(this.BETTING_DELAY);
-    this.bettingTimer = this.BETTING_DELAY;
-
-    this.playersPanel.resetForBetting();
-    this.potDisplay.setPot(this.roundManager.potValue);
-    this.headerBar.updateHistory(this.roundManager.recentCrashes);
-    this.multiplierText.showBetting(this.BETTING_DELAY);
-    this.multiplierText.scale.set(1);
-
-    if (this.playerPendingNextRound && this.roundManager.playerBalance >= this.roundManager.tableBet) {
-      this.roundManager.playerJoinRound();
-      this.playersPanel.setPlayerBetting(PLAYER_ROW, true);
-      this.potDisplay.setPot(this.roundManager.potValue);
-      this.potDisplay.flash();
-      this.cashoutButton.showBetPlaced();
-      this.setButtonLabel(`BET $${this.roundManager.tableBet}`, 0xffee88);
-      this.playerPendingNextRound = false;
-      this.updateBalanceText();
-    } else {
-      this.playerPendingNextRound = false;
-      if (this.roundManager.playerBalance >= this.roundManager.tableBet) {
-        this.cashoutButton.showBetMode(this.roundManager.tableBet);
-        this.setButtonLabel(`BET $${this.roundManager.tableBet}`, 0xffee88);
-      } else {
-        this.cashoutButton.showNotInRound();
-        this.setButtonLabel('', 0x888888);
-      }
-    }
-
-    this.potDisplay.setPot(this.roundManager.potValue);
-    this.updateBalanceText();
-  }
-
-  private startRound() {
-    this.botPlayers.initRound();
-    this.roundManager.startRound();
-    this.multiplierText.reset();
-    this.crashFlash.alpha = 0;
-
-    const bots = this.botPlayers.getBots();
-
-    const anyBotBetting = bots.some(b => b.betCommitted);
-    if (this.roundManager.playerInRound && !anyBotBetting) {
-      this.roundManager.markSoloRound();
-      this.potDisplay.setPot(this.roundManager.potValue);
-    }
-    for (let i = 0; i < bots.length; i++) {
-      if (!bots[i].betCommitted) {
-        this.playersPanel.updatePlayerStatus(i + 1, 'out');
-      } else {
-        this.playersPanel.updatePlayerStatus(i + 1, null);
-      }
-    }
-
-    this.playersPanel.showOnlyBettingPlayers();
-
-    if (this.roundManager.playerInRound) {
-      this.cashoutButton.showCashoutMode();
-      this.setButtonLabel('CASH OUT', 0x888888);
-      this.playersPanel.updatePlayerStatus(PLAYER_ROW, null);
-    } else if (this.roundManager.playerBalance >= this.roundManager.tableBet) {
-      if (this.playerPendingNextRound) {
-        this.cashoutButton.showNextRoundQueued(this.roundManager.tableBet);
-        this.setButtonLabel(`QUEUED $${this.roundManager.tableBet}\nTAP TO CANCEL`, 0x88ccff);
-      } else {
-        this.cashoutButton.showNextRoundMode(this.roundManager.tableBet);
-        this.setButtonLabel(`BET NEXT $${this.roundManager.tableBet}`, 0x88aadd);
-      }
-      this.playersPanel.updatePlayerStatus(PLAYER_ROW, 'out');
-    } else {
-      this.cashoutButton.showNotInRound();
-      this.setButtonLabel('', 0x888888);
-      this.playersPanel.updatePlayerStatus(PLAYER_ROW, 'out');
-    }
-
-    this.updateBalanceText();
-  }
-
-  private onCrash() {
-    this.crashFlash.alpha = 0.6;
-    this.multiplierText.showCrash(this.roundManager.crashMultiplier);
-
-    if (this.roundManager.playerInRound && !this.roundManager.playerCashedOut) {
-      this.cashoutButton.showCrashed();
-      this.setButtonLabel('BUST', 0xff4444);
-      this.playersPanel.updatePlayerStatus(PLAYER_ROW, 'busted');
-    }
-
-    this.botPlayers.onCrash();
-    const bots = this.botPlayers.getBots();
-    for (let i = 0; i < bots.length; i++) {
-      if (bots[i].betCommitted && !bots[i].hasCashedOut) {
-        this.playersPanel.updatePlayerStatus(i + 1, 'busted');
-      }
-    }
-
-    if (!this.roundManager.soloRound) {
-      const winner = this.roundManager.lastWinner;
-      if (winner) {
-        this.startCrashWinDisplay(winner.name, winner.cashoutAmount, this.roundManager.potValue, winner.isPlayer);
-      }
-    }
-
-    this.resultTimer = this.CRASH_DISPLAY;
-  }
-
-  private showRoundResult() {
-    if (this.roundManager.soloRound) {
-      this.roundManager.awardPot();
-    } else {
-      const winner = this.roundManager.lastWinner;
-      const pot    = this.roundManager.potValue;
-
-      if (winner) {
-        if (!winner.isPlayer) {
-          this.botPlayers.awardPotToBot(winner.name, pot);
+  private handleButtonTap() {
+    if (this.phase === 'BETTING' && !this.myBet) {
+      this.socket.send({ type: 'placeBet' });
+    } else if (this.phase === 'RUNNING') {
+      if (this.myBet && !this.myCashedOut) {
+        this.socket.send({ type: 'cashout' });
+      } else if (!this.myBet) {
+        this.playerPendingNextRound = !this.playerPendingNextRound;
+        if (this.playerPendingNextRound) {
+          this.cashoutButton.showNextRoundQueued(10);
+          this.setButtonLabel('QUEUED $10\nTAP TO CANCEL', 0x88ccff);
+        } else {
+          this.cashoutButton.showNextRoundMode(10);
+          this.setButtonLabel('BET NEXT $10', 0x88aadd);
         }
-        this.roundManager.awardPot();
-      } else {
-        this.showNobodyWon();
       }
     }
-
-    // If player cashed out this round, fly their payout to the balance now
-    if (this.roundManager.playerPendingCashoutAmount > 0) {
-      this.startPlayerWinFly(this.roundManager.playerPendingCashoutAmount);
-    }
-
-    this.potDisplay.setPot(this.roundManager.potValue);
-
-    this.botPlayers.checkRebuy();
-    this.updateBalanceText();
-    this.resultTimer = this.RESULT_DELAY;
   }
 
-  // ─── Player cashout fly ────────────────────────────────────────
+  // ── Win animation ──
 
-  private startPlayerWinFly(amount: number) {
-    this.clearPlayerWinFly();
-    this.playerWinAmount  = amount;
-    this.playerWinFlyT    = 0;
-    this.playerWinFlyFrom = { x: this.cashoutButton.x, y: this.cashoutButton.y };
-    this.playerWinFlyTo   = { x: this.balanceText.x,   y: this.balanceText.y   };
-
-    this.playerWinFlyLabel = new Text(
-      `YOU WON $${Math.floor(amount).toLocaleString('en-US')}`,
-      new TextStyle({
-        fontFamily:         '"Courier New", monospace',
-        fontSize:           15,
-        fontWeight:         'bold',
-        fill:               0x00ff88,
-        dropShadow:         true,
-        dropShadowColor:    0x00ff88,
-        dropShadowBlur:     10,
-        dropShadowDistance: 0,
-        align:              'center',
-      }),
-    );
-    this.playerWinFlyLabel.anchor.set(0.5);
-    this.playerWinFlyLabel.x = this.playerWinFlyFrom.x;
-    this.playerWinFlyLabel.y = this.playerWinFlyFrom.y;
-
-    const headerIdx = this.container.children.indexOf(this.headerBar);
-    this.container.addChildAt(this.playerWinFlyLabel, headerIdx);
-  }
-
-  private tickPlayerWinFly(dt: number) {
-    if (!this.playerWinFlyLabel) return;
-
-    this.playerWinFlyT = Math.min(1, this.playerWinFlyT + dt / 0.9);
-    const t = easeOut(this.playerWinFlyT);
-    this.playerWinFlyLabel.x     = lerp(this.playerWinFlyFrom.x, this.playerWinFlyTo.x, t);
-    this.playerWinFlyLabel.y     = lerp(this.playerWinFlyFrom.y, this.playerWinFlyTo.y, t);
-    this.playerWinFlyLabel.alpha = 1 - t * 0.6;
-    this.playerWinFlyLabel.scale.set(1 - t * 0.3);
-
-    if (this.playerWinFlyT >= 1) {
-      this.roundManager.applyPendingCashout();
-      this.clearPlayerWinFly();
-      this.updateBalanceText();
-    }
-  }
-
-  private clearPlayerWinFly() {
-    if (this.playerWinFlyLabel) {
-      this.container.removeChild(this.playerWinFlyLabel);
-      this.playerWinFlyLabel.destroy();
-      this.playerWinFlyLabel = null;
-    }
-    this.playerWinFlyT   = 0;
-    this.playerWinAmount = 0;
-  }
-
-  // ─── Win animation ─────────────────────────────────────────────
-
-  private startCrashWinDisplay(name: string, cashoutAmt: number, potAmt: number, isPlayer: boolean) {
+  private startWinDisplay(name: string, cashoutAmt: number, potAmt: number, isPlayer: boolean) {
     this.clearWinAnimation();
-
-    const w       = this.app.screen.width;
-    const h       = this.app.screen.height;
-    const leftW   = Math.floor(w * 0.26);
-    const rightX  = leftW + 1;
-    const rightW  = w - rightX;
+    const w = this.app.screen.width;
+    const h = this.app.screen.height;
+    const leftW = Math.floor(w * 0.26);
+    const rightX = leftW + 1;
+    const rightW = w - rightX;
     const headerH = HeaderBar.HEIGHT;
-    const color   = isPlayer ? 0x00ff88 : 0xffdd00;
-
-    this.winName          = name;
-    this.winCashoutAmount = cashoutAmt;
-    this.winPotAmount     = potAmt;
-    this.winPotMerged     = false;
-    this.winColor         = color;
+    const color = isPlayer ? 0x00ff88 : 0xffdd00;
 
     const announcementX = rightX + rightW / 2;
     const announcementY = headerH + (h - headerH) * 0.12;
+    const total = cashoutAmt + potAmt;
 
     this.winAnnouncement = new Text(
       `${name}\nWON $${Math.floor(cashoutAmt).toLocaleString('en-US')}`,
       new TextStyle({
-        fontFamily:         '"Courier New", monospace',
-        fontSize:           28,
-        fontWeight:         'bold',
-        fill:               color,
-        dropShadow:         true,
-        dropShadowColor:    color,
-        dropShadowBlur:     20,
-        dropShadowDistance: 0,
-        align:              'center',
+        fontFamily: '"Courier New", monospace', fontSize: 28, fontWeight: 'bold',
+        fill: color, dropShadow: true, dropShadowColor: color,
+        dropShadowBlur: 20, dropShadowDistance: 0, align: 'center',
       }),
     );
     this.winAnnouncement.anchor.set(0.5);
@@ -472,23 +523,19 @@ export class GameScene {
     this.winAnnouncement.y = announcementY;
 
     const potPos = this.potDisplay.getPotCenter();
-    this.winFlyFrom  = potPos;
-    this.winFlyTo    = { x: announcementX, y: announcementY };
+    this.winFlyFrom = potPos;
+    this.winFlyTo = { x: announcementX, y: announcementY };
     this.winFlashPos = { x: announcementX, y: announcementY };
-    this.winFlyT     = 0;
+    this.winFlyT = 0;
     this.winFlashAlpha = 0;
+    this.winPotMerged = false;
 
     this.winFlyLabel = new Text(
       `pot +$${Math.floor(potAmt).toLocaleString('en-US')}`,
       new TextStyle({
-        fontFamily:         '"Courier New", monospace',
-        fontSize:           13,
-        fontWeight:         'bold',
-        fill:               0xffdd00,
-        dropShadow:         true,
-        dropShadowColor:    0xffdd00,
-        dropShadowBlur:     8,
-        dropShadowDistance: 0,
+        fontFamily: '"Courier New", monospace', fontSize: 13, fontWeight: 'bold',
+        fill: 0xffdd00, dropShadow: true, dropShadowColor: 0xffdd00,
+        dropShadowBlur: 8, dropShadowDistance: 0,
       }),
     );
     this.winFlyLabel.anchor.set(0.5);
@@ -512,130 +559,85 @@ export class GameScene {
       if (this.winFlyT >= 1) {
         this.winFlyLabel.visible = false;
         this.winFlashAlpha = 1;
-        this.winPotMerged  = true;
-        if (this.winAnnouncement) {
-          const total = this.winCashoutAmount + this.winPotAmount;
-          this.winAnnouncement.text = `${this.winName}\nWON $${Math.floor(total).toLocaleString('en-US')}`;
-        }
+        this.winPotMerged = true;
       }
     }
 
     if (this.winFlashAlpha > 0) {
       this.winFlashAlpha = Math.max(0, this.winFlashAlpha - dt / 0.5);
-      this.drawWinFlash(this.winFlashPos.x, this.winFlashPos.y, this.winFlashAlpha);
+      this.winFlash.clear();
+      if (this.winFlashAlpha > 0) {
+        this.winFlash.beginFill(0xffffff, this.winFlashAlpha * 0.9);
+        this.winFlash.drawCircle(this.winFlashPos.x, this.winFlashPos.y, 6 + (1 - this.winFlashAlpha) * 10);
+        this.winFlash.endFill();
+        this.winFlash.beginFill(0xffdd00, this.winFlashAlpha * 0.45);
+        this.winFlash.drawCircle(this.winFlashPos.x, this.winFlashPos.y, 18 + (1 - this.winFlashAlpha) * 24);
+        this.winFlash.endFill();
+      }
     }
-
-    if (this.winAnnouncement && this.roundManager.state === GameState.RESULT && this.resultTimer < 1.0) {
-      this.winAnnouncement.alpha = Math.max(0, this.resultTimer);
-    }
-  }
-
-  private drawWinFlash(x: number, y: number, alpha: number) {
-    this.winFlash.clear();
-    if (alpha <= 0) return;
-    this.winFlash.beginFill(0xffffff, alpha * 0.9);
-    this.winFlash.drawCircle(x, y, 6 + (1 - alpha) * 10);
-    this.winFlash.endFill();
-    this.winFlash.beginFill(0xffdd00, alpha * 0.45);
-    this.winFlash.drawCircle(x, y, 18 + (1 - alpha) * 24);
-    this.winFlash.endFill();
-  }
-
-  private showNobodyWon() {
-    this.clearWinAnimation();
-    const w       = this.app.screen.width;
-    const h       = this.app.screen.height;
-    const leftW   = Math.floor(w * 0.26);
-    const rightX  = leftW + 1;
-    const rightW  = w - rightX;
-    const headerH = HeaderBar.HEIGHT;
-
-    this.winAnnouncement = new Text(
-      'NOBODY WON',
-      new TextStyle({
-        fontFamily:         '"Courier New", monospace',
-        fontSize:           17,
-        fontWeight:         'bold',
-        fill:               0xff4444,
-        dropShadow:         true,
-        dropShadowColor:    0xff4444,
-        dropShadowBlur:     14,
-        dropShadowDistance: 0,
-        align:              'center',
-      }),
-    );
-    this.winAnnouncement.anchor.set(0.5);
-    this.winAnnouncement.x = rightX + rightW / 2;
-    this.winAnnouncement.y = headerH + (h - headerH) * 0.35;
-    this.container.addChild(this.winAnnouncement);
   }
 
   private clearWinAnimation() {
-    if (this.winAnnouncement) {
-      this.container.removeChild(this.winAnnouncement);
-      this.winAnnouncement.destroy();
-      this.winAnnouncement = null;
-    }
-    if (this.winFlyLabel) {
-      this.container.removeChild(this.winFlyLabel);
-      this.winFlyLabel.destroy();
-      this.winFlyLabel = null;
-    }
+    if (this.winAnnouncement) { this.container.removeChild(this.winAnnouncement); this.winAnnouncement.destroy(); this.winAnnouncement = null; }
+    if (this.winFlyLabel) { this.container.removeChild(this.winFlyLabel); this.winFlyLabel.destroy(); this.winFlyLabel = null; }
     this.winFlash.clear();
-    this.winFlashAlpha    = 0;
-    this.winFlyT          = 0;
-    this.winPotMerged     = false;
-    this.winName          = '';
-    this.winCashoutAmount = 0;
-    this.winPotAmount     = 0;
+    this.winFlashAlpha = 0;
+    this.winFlyT = 0;
+    this.winPotMerged = false;
   }
 
-  // ─── Player action ─────────────────────────────────────────────
+  // ── Player cashout fly ──
 
-  private handleButtonTap() {
-    if (this.roundManager.state === GameState.BETTING) {
-      const joined = this.roundManager.playerJoinRound();
-      if (joined) {
-        this.cashoutButton.showBetPlaced();
-        // label stays as "BET $XX" — no change here
-        this.playersPanel.setPlayerBetting(PLAYER_ROW, true);
-        this.potDisplay.setPot(this.roundManager.potValue);
-        this.potDisplay.flash();
-        this.updateBalanceText();
-      }
-    } else if (this.roundManager.state === GameState.RUNNING) {
-      if (this.roundManager.playerInRound) {
-        const mult = this.roundManager.playerCashout();
-        if (mult > 0) {
-          this.cashoutButton.showCashedOut(mult);
-          this.setButtonLabel(`${mult.toFixed(2)}×`, 0x00ff88);
-          this.playersPanel.updatePlayerStatus(PLAYER_ROW, mult);
-        }
-      } else {
-        this.playerPendingNextRound = !this.playerPendingNextRound;
-        if (this.playerPendingNextRound) {
-          this.cashoutButton.showNextRoundQueued(this.roundManager.tableBet);
-          this.setButtonLabel(`QUEUED $${this.roundManager.tableBet}\nTAP TO CANCEL`, 0x88ccff);
-        } else {
-          this.cashoutButton.showNextRoundMode(this.roundManager.tableBet);
-          this.setButtonLabel(`BET NEXT $${this.roundManager.tableBet}`, 0x88aadd);
-        }
-      }
-    }
+  private startPlayerWinFly(amount: number) {
+    this.clearPlayerWinFly();
+    this.playerWinFlyT = 0;
+    this.playerWinFlyFrom = { x: this.cashoutButton.x, y: this.cashoutButton.y };
+    this.playerWinFlyTo = { x: this.balanceText.x, y: this.balanceText.y };
+
+    this.playerWinFlyLabel = new Text(
+      `YOU WON $${Math.floor(amount).toLocaleString('en-US')}`,
+      new TextStyle({
+        fontFamily: '"Courier New", monospace', fontSize: 15, fontWeight: 'bold',
+        fill: 0x00ff88, dropShadow: true, dropShadowColor: 0x00ff88,
+        dropShadowBlur: 10, dropShadowDistance: 0, align: 'center',
+      }),
+    );
+    this.playerWinFlyLabel.anchor.set(0.5);
+    this.playerWinFlyLabel.x = this.playerWinFlyFrom.x;
+    this.playerWinFlyLabel.y = this.playerWinFlyFrom.y;
+
+    const headerIdx = this.container.children.indexOf(this.headerBar);
+    this.container.addChildAt(this.playerWinFlyLabel, headerIdx);
   }
 
-  // ─── Layout ────────────────────────────────────────────────────
+  private tickPlayerWinFly(dt: number) {
+    if (!this.playerWinFlyLabel) return;
+    this.playerWinFlyT = Math.min(1, this.playerWinFlyT + dt / 0.9);
+    const t = easeOut(this.playerWinFlyT);
+    this.playerWinFlyLabel.x = lerp(this.playerWinFlyFrom.x, this.playerWinFlyTo.x, t);
+    this.playerWinFlyLabel.y = lerp(this.playerWinFlyFrom.y, this.playerWinFlyTo.y, t);
+    this.playerWinFlyLabel.alpha = 1 - t * 0.6;
+    this.playerWinFlyLabel.scale.set(1 - t * 0.3);
+    if (this.playerWinFlyT >= 1) { this.clearPlayerWinFly(); this.updateBalanceText(); }
+  }
+
+  private clearPlayerWinFly() {
+    if (this.playerWinFlyLabel) { this.container.removeChild(this.playerWinFlyLabel); this.playerWinFlyLabel.destroy(); this.playerWinFlyLabel = null; }
+    this.playerWinFlyT = 0;
+  }
+
+  // ── Layout ──
 
   private layout() {
-    const w       = this.app.screen.width;
-    const h       = this.app.screen.height;
+    const w = this.app.screen.width;
+    const h = this.app.screen.height;
     const headerH = HeaderBar.HEIGHT;
 
     this.headerBar.x = 0;
     this.headerBar.y = 0;
     this.headerBar.layout(w);
 
-    const leftW  = Math.floor(w * 0.26);
+    const leftW = Math.floor(w * 0.26);
     const rightX = leftW + 1;
     const rightW = w - rightX;
 
@@ -656,7 +658,6 @@ export class GameScene {
 
     this.balanceText.x = rightX + rightW / 2;
     this.balanceText.y = headerH + (h - headerH) * 0.55 + 112;
-
   }
 
   private layoutPlayersPanel() {
@@ -664,16 +665,13 @@ export class GameScene {
     const h = this.app.screen.height;
     const headerH = HeaderBar.HEIGHT;
     const potAreaH = 48;
-
     this.playersPanel.x = 0;
     this.playersPanel.y = headerH + potAreaH;
     this.playersPanel.layout(w, h - headerH - potAreaH);
     this.playersPanel.alpha = 0.5;
   }
 
-  onResize(_width: number, _height: number) {
-    this.layout();
-  }
+  onResize(_w: number, _h: number) { this.layout(); }
 
   private setButtonLabel(text: string, fill: number) {
     this.buttonLabel.text = text;
@@ -681,7 +679,7 @@ export class GameScene {
   }
 
   private updateBalanceText() {
-    const bal = this.roundManager.playerBalance;
-    this.balanceText.text = `balance $${bal.toLocaleString('en-US')}`;
+    this.balance = this.socket.balance;
+    this.balanceText.text = `balance $${this.balance.toLocaleString('en-US')}`;
   }
 }
