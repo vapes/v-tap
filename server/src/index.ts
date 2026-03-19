@@ -7,6 +7,7 @@ import { randomUUID } from 'crypto';
 import { RoomManager } from './RoomManager';
 import { Player } from './Player';
 import { config } from './config';
+import { BotManager } from './BotManager';
 import type { ClientMessage } from '../../shared/protocol';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -22,6 +23,7 @@ app.get('*', (_req, res) => {
 });
 
 const roomManager = new RoomManager();
+new BotManager(roomManager.crashRoom, roomManager.tapRoom, 10);
 const connectedPlayers = new Map<string, Player>();
 
 const RATE_LIMIT_WINDOW_MS = 1000;
