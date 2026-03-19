@@ -3,6 +3,7 @@ import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { randomUUID } from 'crypto';
 import { RoomManager } from './RoomManager';
 import { Player } from './Player';
 import { config } from './config';
@@ -13,7 +14,7 @@ const CLIENT_DIST = path.resolve(__dirname, '../../dist');
 
 const app = express();
 const server = createServer(app);
-const wss = new WebSocketServer({ noServer: true });
+const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 
 app.use(express.static(CLIENT_DIST));
 app.get('*', (_req, res) => {
@@ -22,11 +23,9 @@ app.get('*', (_req, res) => {
 
 const roomManager = new RoomManager();
 const connectedPlayers = new Map<string, Player>();
-let nextId = 1;
 
-function generateId(): string {
-  return String(nextId++).padStart(6, '0');
-}
+const RATE_LIMIT_WINDOW_MS = 1000;
+const RATE_LIMIT_MAX = 15;
 
 server.on('upgrade', (request, socket, head) => {
   if (request.url === '/ws') {
@@ -39,13 +38,26 @@ server.on('upgrade', (request, socket, head) => {
 });
 
 wss.on('connection', (ws: WebSocket) => {
-  const playerId = generateId();
+  const playerId = randomUUID();
   const player = new Player(playerId, ws, config.player.startingBalance);
   connectedPlayers.set(playerId, player);
+
+  let msgCount = 0;
+  let windowStart = Date.now();
 
   console.log(`[connect] ${playerId}`);
 
   ws.on('message', (raw) => {
+    const now = Date.now();
+    if (now - windowStart > RATE_LIMIT_WINDOW_MS) {
+      msgCount = 0;
+      windowStart = now;
+    }
+    if (++msgCount > RATE_LIMIT_MAX) {
+      player.send({ type: 'error', message: 'Rate limited' });
+      return;
+    }
+
     let msg: ClientMessage;
     try {
       msg = JSON.parse(String(raw));
@@ -65,13 +77,16 @@ wss.on('connection', (ws: WebSocket) => {
 function handleMessage(player: Player, msg: ClientMessage) {
   switch (msg.type) {
     case 'setNickname': {
+      if (typeof msg.nickname !== 'string') return;
       const nick = msg.nickname.trim().slice(0, 16) || player.nickname;
       player.nickname = nick;
       player.send({ type: 'welcome', playerId: player.id, nickname: nick, balance: player.balance });
       break;
     }
     case 'joinRoom':
-      roomManager.joinRoom(player, msg.mode);
+      if (!roomManager.joinRoom(player, msg.mode)) {
+        player.send({ type: 'error', message: 'Invalid game mode' });
+      }
       break;
     case 'leaveRoom':
       roomManager.leaveCurrentRoom(player);

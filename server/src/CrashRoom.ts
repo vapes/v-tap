@@ -1,6 +1,11 @@
+import { randomBytes } from 'crypto';
 import { Player } from './Player';
 import { config } from './config';
 import type { PlayerInfo, ServerMessage, RoomStateMsg } from '../../shared/protocol';
+
+function secureRandom(): number {
+  return randomBytes(4).readUInt32BE() / 0x100000000;
+}
 
 type Phase = 'BETTING' | 'RUNNING' | 'CRASHED' | 'RESULT';
 
@@ -95,16 +100,21 @@ export class CrashRoom {
     const rp = this.roundPlayers.get(playerId);
     if (!rp || rp.cashedOut) return false;
 
+    const now = Date.now();
+    const elapsed = (now - this.roundStartTime) / 1000;
+    const liveMultiplier = Math.min(Math.exp(elapsed * this.growthRate), this.crashPoint);
+    if (liveMultiplier >= this.crashPoint) return false;
+
     rp.cashedOut = true;
-    rp.cashoutMultiplier = this.multiplier;
-    rp.cashoutAmount = this.soloRound ? rp.bet * this.multiplier : rp.wager * this.multiplier;
+    rp.cashoutMultiplier = liveMultiplier;
+    rp.cashoutAmount = this.soloRound ? rp.bet * liveMultiplier : rp.wager * liveMultiplier;
     rp.player.balance += rp.cashoutAmount;
 
     rp.player.send({ type: 'balanceUpdate', balance: rp.player.balance });
     this.broadcast({
       type: 'playerCashedOut', playerId,
       nickname: rp.player.nickname,
-      multiplier: this.multiplier,
+      multiplier: liveMultiplier,
       cashoutAmount: rp.cashoutAmount,
     });
     return true;
@@ -124,6 +134,8 @@ export class CrashRoom {
   private stopGameLoop() {
     if (this.tickInterval) { clearInterval(this.tickInterval); this.tickInterval = null; }
     this.phase = 'BETTING';
+    this.pot = 0;
+    this.roundPlayers.clear();
   }
 
   private tick() {
@@ -194,7 +206,7 @@ export class CrashRoom {
     this.elapsed = 0;
     this.roundStartTime = Date.now();
     this.crashPoint = this.generateCrashPoint();
-    this.growthRate = config.growth.rateMin + Math.random() * (config.growth.rateMax - config.growth.rateMin);
+    this.growthRate = config.growth.rateMin + secureRandom() * (config.growth.rateMax - config.growth.rateMin);
 
     this.broadcast({ type: 'phaseChange', phase: 'RUNNING', growthRate: this.growthRate });
   }
@@ -260,7 +272,7 @@ export class CrashRoom {
   }
 
   private generateCrashPoint(): number {
-    const r = Math.random();
+    const r = secureRandom();
     const { houseEdge, minMultiplier, maxMultiplier } = config.crash;
     const raw = (1 - houseEdge) / (1 - r);
     return Math.min(Math.max(raw, minMultiplier), maxMultiplier);

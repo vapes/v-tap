@@ -1,6 +1,11 @@
+import { randomBytes } from 'crypto';
 import { Player } from './Player';
 import { config } from './config';
 import type { PlayerInfo, ServerMessage, RoomStateMsg } from '../../shared/protocol';
+
+function secureRandom(): number {
+  return randomBytes(4).readUInt32BE() / 0x100000000;
+}
 
 type Phase = 'BETTING' | 'RUNNING' | 'ENDED' | 'RESULT';
 
@@ -122,6 +127,8 @@ export class TapRoom {
   private stopGameLoop() {
     if (this.tickInterval) { clearInterval(this.tickInterval); this.tickInterval = null; }
     this.phase = 'BETTING';
+    this.pot = 0;
+    this.roundPlayers.clear();
   }
 
   private tick() {
@@ -234,7 +241,7 @@ export class TapRoom {
   // ── Helpers ──
 
   private generateDuration(): number {
-    const r = Math.random();
+    const r = secureRandom();
     const { timerMin, timerMax } = config.tap;
     const raw = timerMin / (1 - r);
     return Math.min(Math.max(raw, timerMin), timerMax);

@@ -7,13 +7,15 @@ export class RoomManager {
   readonly crashRoom = new CrashRoom();
   readonly tapRoom = new TapRoom();
 
-  joinRoom(player: Player, mode: GameMode) {
+  joinRoom(player: Player, mode: GameMode): boolean {
+    if (mode !== 'crash' && mode !== 'tap') return false;
     this.leaveCurrentRoom(player);
     if (mode === 'crash') {
       this.crashRoom.addPlayer(player);
     } else {
       this.tapRoom.addPlayer(player);
     }
+    return true;
   }
 
   leaveCurrentRoom(player: Player) {
