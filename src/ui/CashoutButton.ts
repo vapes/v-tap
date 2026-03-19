@@ -124,14 +124,40 @@ export class CashoutButton extends Container {
     this.paw.visible           = true;
   }
 
-  setTapCount(used: number, max: number) {
-    const remaining = max - used;
-    this.tapCountText.text    = `${remaining}/${max}`;
-    this.tapCountText.visible = remaining > 0 && used >= 0;
+  setCooldown(remaining: number, total: number) {
+    if (remaining > 0) {
+      this.tapCountText.text    = remaining.toFixed(1);
+      this.tapCountText.visible = true;
+      this.drawCooldownRing(1 - remaining / total);
+    } else {
+      this.tapCountText.visible = false;
+      this.clearProgressRing();
+    }
   }
 
-  hideTapCount() {
+  hideCooldown() {
     this.tapCountText.visible = false;
+    this.clearProgressRing();
+  }
+
+  private drawCooldownRing(progress: number) {
+    const r = this.PROGRESS_RADIUS;
+    const t = this.PROGRESS_THICKNESS;
+    this.progressRing.clear();
+
+    this.progressRing.lineStyle(t, 0xff8800, 0.15);
+    this.progressRing.moveTo(0, -r);
+    this.progressRing.arc(0, 0, r, -Math.PI / 2, Math.PI * 3 / 2, false);
+
+    if (progress > 0.005) {
+      const endAngle = -Math.PI / 2 + Math.PI * 2 * progress;
+      const sx = r * Math.cos(-Math.PI / 2);
+      const sy = r * Math.sin(-Math.PI / 2);
+
+      this.progressRing.lineStyle(t, 0xff8800, 0.9);
+      this.progressRing.moveTo(sx, sy);
+      this.progressRing.arc(0, 0, r, -Math.PI / 2, endAngle, false);
+    }
   }
 
   private handleTap(_e: FederatedPointerEvent) {
@@ -321,6 +347,16 @@ export class CashoutButton extends Container {
     this.drawPaw(0xffffff);
     this.drawGlow(color, intensity);
     this.scale.set(1 + intensity * 0.04);
+  }
+
+  showTapCooldown() {
+    this.isEnabled = false;
+    this.cursor    = 'default';
+    this.drawButton(0x553300);
+    this.drawPaw(0x886644);
+    this.drawGlow(0xff8800, 0.2);
+    this.alpha = 0.6;
+    this.hideCountdown();
   }
 
   showTapDisabled() {

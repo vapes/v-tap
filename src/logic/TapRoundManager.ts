@@ -22,16 +22,16 @@ export class TapRoundManager {
   potValue     = 0;
   roundNumber  = 0;
 
-  /** The fixed bet for this mode */
-  tableBet = mathConfig.tap.fixedBet;
+  entryFee = mathConfig.tap.entryFee;
+  tapCost  = mathConfig.tap.tapCost;
 
   playerBalance     = mathConfig.player.startingBalance;
   playerInRound     = false;
   playerTapCount    = 0;
   playerLastTapTime = -1;
 
-  /** Per-participant tap counts keyed by name */
   tapCounts = new Map<string, number>();
+  private lastTapTimes = new Map<string, number>();
   lastTapper: TapEntry | null = null;
 
   /** Full history of taps in order */
@@ -46,6 +46,7 @@ export class TapRoundManager {
     this.playerInRound  = false;
     this.playerTapCount = 0;
     this.tapCounts.clear();
+    this.lastTapTimes.clear();
     this.lastTapper  = null;
     this.tapHistory  = [];
     this.winnerPayout = 0;
@@ -53,10 +54,10 @@ export class TapRoundManager {
 
   playerJoinRound(): boolean {
     if (this.playerInRound || this.state !== TapGameState.BETTING) return false;
-    if (this.playerBalance < this.tableBet) return false;
+    if (this.playerBalance < this.entryFee) return false;
 
-    this.playerBalance -= this.tableBet;
-    this.potValue      += this.tableBet;
+    this.playerBalance -= this.entryFee;
+    this.potValue      += this.entryFee;
     this.playerInRound  = true;
     return true;
   }
@@ -72,6 +73,7 @@ export class TapRoundManager {
     this.playerTapCount    = 0;
     this.playerLastTapTime = -1;
     this.tapCounts.clear();
+    this.lastTapTimes.clear();
     this.lastTapper  = null;
     this.tapHistory  = [];
 
@@ -95,17 +97,19 @@ export class TapRoundManager {
   }
 
   /**
-   * Register a tap. First tap per participant is free; subsequent taps cost tableBet.
+   * Register a tap. First tap is free; subsequent taps cost tapCost. Enforces cooldown.
    * Returns true if the tap was accepted.
    */
   registerPlayerTap(): boolean {
     if (this.state !== TapGameState.RUNNING || !this.playerInRound) return false;
-    if (this.playerTapCount >= mathConfig.tap.maxTaps) return false;
+
+    if (this.playerLastTapTime >= 0 &&
+        this.elapsedTime - this.playerLastTapTime < mathConfig.tap.tapCooldownSec) return false;
 
     if (this.playerTapCount > 0) {
-      if (this.playerBalance < this.tableBet) return false;
-      this.playerBalance -= this.tableBet;
-      this.potValue      += this.tableBet;
+      if (this.playerBalance < this.tapCost) return false;
+      this.playerBalance -= this.tapCost;
+      this.potValue      += this.tapCost;
     }
 
     this.playerTapCount++;
@@ -118,17 +122,20 @@ export class TapRoundManager {
   }
 
   /**
-   * Register a bot tap. Returns the cost charged (0 for first tap, tableBet otherwise).
-   * Returns -1 if the tap was rejected.
+   * Register a bot tap. Returns the cost charged (0 for first tap, tapCost otherwise).
+   * Returns -1 if the tap was rejected (cooldown active).
    */
   registerBotTap(name: string): number {
     if (this.state !== TapGameState.RUNNING) return -1;
 
+    const lastTime = this.lastTapTimes.get(name) ?? -1;
+    if (lastTime >= 0 && this.elapsedTime - lastTime < mathConfig.tap.tapCooldownSec) return -1;
+
     const count = this.tapCounts.get(name) ?? 0;
-    if (count >= mathConfig.tap.maxTaps) return -1;
-    const cost = count > 0 ? this.tableBet : 0;
+    const cost = count > 0 ? this.tapCost : 0;
 
     this.tapCounts.set(name, count + 1);
+    this.lastTapTimes.set(name, this.elapsedTime);
     const entry: TapEntry = { name, isPlayer: false, tapTime: this.elapsedTime };
     this.lastTapper = entry;
     this.tapHistory.push(entry);
@@ -180,6 +187,7 @@ export class TapRoundManager {
     this.playerTapCount    = 0;
     this.playerLastTapTime = -1;
     this.tapCounts.clear();
+    this.lastTapTimes.clear();
     this.lastTapper      = null;
     this.tapHistory      = [];
     this.winnerPayout    = 0;

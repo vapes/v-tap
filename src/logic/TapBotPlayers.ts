@@ -82,7 +82,7 @@ export class TapBotPlayers {
   prepareBettingPhase(bettingDuration: number) {
     const roundBetChance = 0.20 + Math.random() * 0.50;
     for (const bot of this.bots) {
-      bot.willBet         = bot.balance >= this.roundManager.tableBet && Math.random() < roundBetChance;
+      bot.willBet         = bot.balance >= this.roundManager.entryFee && Math.random() < roundBetChance;
       bot.betDecisionTime = 0.3 + Math.random() * (bettingDuration - 0.6);
       bot.betCommitted    = false;
       bot.tapCount        = 0;
@@ -99,8 +99,8 @@ export class TapBotPlayers {
       if (elapsed < bot.betDecisionTime) continue;
 
       bot.betCommitted = true;
-      bot.balance     -= this.roundManager.tableBet;
-      this.roundManager.botJoinRound(this.roundManager.tableBet);
+      bot.balance     -= this.roundManager.entryFee;
+      this.roundManager.botJoinRound(this.roundManager.entryFee);
       joined.push(i);
       this.onBotBetPlaced?.(i);
     }
@@ -122,7 +122,8 @@ export class TapBotPlayers {
    */
   private getNextTapDelay(bot: TapBot, elapsed: number): number {
     const cfg = TAP_PERSONALITY_CONFIG[bot.personality];
-    const base = cfg.intervalMin + Math.random() * (cfg.intervalMax - cfg.intervalMin);
+    const cooldown = mathConfig.tap.tapCooldownSec;
+    const base = Math.max(cooldown, cfg.intervalMin) + Math.random() * (cfg.intervalMax - cfg.intervalMin);
     const hesitation = elapsed * 0.05;
     return elapsed + base + hesitation;
   }
@@ -139,8 +140,8 @@ export class TapBotPlayers {
       if (!bot.betCommitted) continue;
       if (elapsed < bot.nextTapTime) continue;
 
-      const tapCost = bot.tapCount > 0 ? this.roundManager.tableBet : 0;
-      if (tapCost > 0 && bot.balance < this.roundManager.tableBet) continue;
+      const tapCost = bot.tapCount > 0 ? this.roundManager.tapCost : 0;
+      if (tapCost > 0 && bot.balance < this.roundManager.tapCost) continue;
 
       const cost = this.roundManager.registerBotTap(bot.name);
       if (cost < 0) continue;

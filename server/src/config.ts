@@ -21,9 +21,10 @@ export const config = {
     crashDisplaySec: 1.5,
   },
   tap: {
-    fixedBet: 10,
+    entryFee: 50,
+    tapCost: 5,
+    tapCooldownSec: 2,
     casinoCut: 0.01,
-    maxTaps: 5,
     timerMin: 5,
     timerMax: 30,
     bettingDelaySec: 8,

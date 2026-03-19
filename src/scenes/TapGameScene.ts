@@ -24,8 +24,9 @@ function nickColor(name: string): number {
   return NEON_COLORS[Math.abs(h) % NEON_COLORS.length];
 }
 
-const MAX_TAPS = 5;
-const FIXED_BET = 10;
+const ENTRY_FEE = 50;
+const TAP_COST = 5;
+const TAP_COOLDOWN = 2;
 
 type Phase = 'BETTING' | 'RUNNING' | 'ENDED' | 'RESULT' | 'IDLE';
 
@@ -59,6 +60,7 @@ export class TapGameScene {
   private balance = 0;
   private myBet = false;
   private myTapCount = 0;
+  private myLastTapElapsed = -1;
   private bettingTimeLeft = 0;
   private history: number[] = [];
   private lastTapperId: string | null = null;
@@ -175,8 +177,13 @@ export class TapGameScene {
 
     this.myBet = false;
     this.myTapCount = 0;
+    this.myLastTapElapsed = -1;
     const myInfo = this.players.get(this.socket.playerId);
-    if (myInfo?.inRound) { this.myBet = true; this.myTapCount = myInfo.tapCount ?? 0; }
+    if (myInfo?.inRound) {
+      this.myBet = true;
+      this.myTapCount = myInfo.tapCount ?? 0;
+      this.myLastTapElapsed = myInfo.lastTapTime ?? -1;
+    }
 
     this.rebuildPlayerList();
     this.potDisplay.setPot(this.pot);
@@ -198,6 +205,7 @@ export class TapGameScene {
       this.bettingTimeLeft = msg.bettingTimeLeft ?? 8;
       this.myBet = false;
       this.myTapCount = 0;
+      this.myLastTapElapsed = -1;
       this.lastTapperId = null;
       this.clearWinAnimation();
 
@@ -209,7 +217,7 @@ export class TapGameScene {
       this.headerBar.updateTapHistory(this.history);
       this.multiplierText.scale.set(1);
 
-      if (this.playerPendingNextRound && this.balance >= FIXED_BET) {
+      if (this.playerPendingNextRound && this.balance >= ENTRY_FEE) {
         this.socket.send({ type: 'placeBet' });
         this.playerPendingNextRound = false;
       }
@@ -226,7 +234,7 @@ export class TapGameScene {
       this.elapsed = duration;
       this.labelBlinkPhase = 0;
       this.buttonLabel.alpha = 1;
-      this.cashoutButton.hideTapCount();
+      this.cashoutButton.hideCooldown();
       this.endFlash.alpha = 0.6;
       this.multiplierText.showEnded(duration);
       this.history.push(parseFloat(duration.toFixed(1)));
@@ -253,8 +261,8 @@ export class TapGameScene {
       this.myBet = true;
       this.balance = this.socket.balance;
       this.cashoutButton.showBetPlaced();
-      this.setButtonLabel(`BET $${FIXED_BET}`, 0xffee88);
-      this.potDisplay.setTotalBet(FIXED_BET, false);
+      this.setButtonLabel(`BET $${ENTRY_FEE}`, 0xffee88);
+      this.potDisplay.setTotalBet(ENTRY_FEE, false);
       this.updateBalanceText();
     }
 
@@ -279,12 +287,12 @@ export class TapGameScene {
 
     if (msg.playerId === this.socket.playerId) {
       this.myTapCount = msg.tapCount;
+      this.myLastTapElapsed = msg.tapTime;
       this.balance = this.socket.balance;
       this.updateBalanceText();
-      this.cashoutButton.setTapCount(this.myTapCount, MAX_TAPS);
 
       const extraTaps = Math.max(0, this.myTapCount - 1);
-      this.potDisplay.setTotalBet(FIXED_BET + extraTaps * FIXED_BET, true);
+      this.potDisplay.setTotalBet(ENTRY_FEE + extraTaps * TAP_COST, true);
     }
 
     this.updateTapButtonLabel();
@@ -334,10 +342,10 @@ export class TapGameScene {
   private enterBettingUI() {
     if (this.myBet) {
       this.cashoutButton.showBetPlaced();
-      this.setButtonLabel(`BET $${FIXED_BET}`, 0xffee88);
-    } else if (this.balance >= FIXED_BET) {
-      this.cashoutButton.showBetMode(FIXED_BET);
-      this.setButtonLabel(`BET $${FIXED_BET}`, 0xffee88);
+      this.setButtonLabel(`BET $${ENTRY_FEE}`, 0xffee88);
+    } else if (this.balance >= ENTRY_FEE) {
+      this.cashoutButton.showBetMode(ENTRY_FEE);
+      this.setButtonLabel(`BET $${ENTRY_FEE}`, 0xffee88);
     } else {
       this.cashoutButton.showNotInRound();
       this.setButtonLabel('', 0x888888);
@@ -348,20 +356,19 @@ export class TapGameScene {
   private enterRunningUI() {
     if (this.myBet) {
       this.cashoutButton.showTapMode();
-      this.cashoutButton.setTapCount(this.myTapCount, MAX_TAPS);
       this.setButtonLabel('TAP!', 0xff8800);
-    } else if (this.balance >= FIXED_BET) {
+    } else if (this.balance >= ENTRY_FEE) {
       if (this.playerPendingNextRound) {
-        this.cashoutButton.showNextRoundQueued(FIXED_BET);
-        this.setButtonLabel(`QUEUED $${FIXED_BET}\nTAP TO CANCEL`, 0x88ccff);
+        this.cashoutButton.showNextRoundQueued(ENTRY_FEE);
+        this.setButtonLabel(`QUEUED $${ENTRY_FEE}\nTAP TO CANCEL`, 0x88ccff);
       } else {
-        this.cashoutButton.showNextRoundMode(FIXED_BET);
-        this.setButtonLabel(`BET NEXT $${FIXED_BET}`, 0x88aadd);
+        this.cashoutButton.showNextRoundMode(ENTRY_FEE);
+        this.setButtonLabel(`BET NEXT $${ENTRY_FEE}`, 0x88aadd);
       }
-      this.cashoutButton.hideTapCount();
+      this.cashoutButton.hideCooldown();
     } else {
       this.cashoutButton.showNotInRound();
-      this.cashoutButton.hideTapCount();
+      this.cashoutButton.hideCooldown();
       this.setButtonLabel('', 0x888888);
     }
     this.updateBalanceText();
@@ -369,16 +376,24 @@ export class TapGameScene {
 
   private updateTapButtonLabel() {
     if (!this.myBet || this.phase !== 'RUNNING') return;
-    if (this.myTapCount >= MAX_TAPS) {
-      this.cashoutButton.showTapDisabled();
-      this.setButtonLabel('MAX TAPS', 0x888888);
-    } else if (this.myTapCount > 0 && this.balance < FIXED_BET) {
+    const cooldownLeft = this.getCooldownRemaining();
+    if (cooldownLeft > 0) {
+      this.cashoutButton.showTapCooldown();
+      this.cashoutButton.setCooldown(cooldownLeft, TAP_COOLDOWN);
+      this.setButtonLabel('COOLDOWN', 0x888888);
+    } else if (this.myTapCount > 0 && this.balance < TAP_COST) {
       this.cashoutButton.showTapDisabled();
       this.setButtonLabel('NO FUNDS', 0xff4444);
     } else {
-      const label = this.myTapCount > 0 ? 'BET MORE TO WIN' : 'TAP TO BET';
+      this.cashoutButton.showTapMode();
+      const label = this.myTapCount > 0 ? `TAP $${TAP_COST}` : 'TAP TO BET';
       this.setButtonLabel(label, this.myTapCount > 0 ? 0xffdd00 : 0xff8800);
     }
+  }
+
+  private getCooldownRemaining(): number {
+    if (this.myLastTapElapsed < 0) return 0;
+    return Math.max(0, TAP_COOLDOWN - (this.elapsed - this.myLastTapElapsed));
   }
 
   private updateAllTapHighlights() {
@@ -438,8 +453,16 @@ export class TapGameScene {
     this.multiplierText.animate(dt);
 
     if (this.myBet) {
-      this.cashoutButton.animateTap(dt, this.elapsed);
-      if (this.myTapCount > 0) {
+      const cooldownLeft = this.getCooldownRemaining();
+      if (cooldownLeft > 0) {
+        this.cashoutButton.setCooldown(cooldownLeft, TAP_COOLDOWN);
+      } else {
+        this.cashoutButton.hideCooldown();
+        this.cashoutButton.animateTap(dt, this.elapsed);
+      }
+      this.updateTapButtonLabel();
+
+      if (this.myTapCount > 0 && cooldownLeft <= 0) {
         this.labelBlinkPhase += dt * 4;
         this.buttonLabel.alpha = 0.5 + 0.5 * Math.abs(Math.sin(this.labelBlinkPhase));
       } else {
@@ -478,11 +501,11 @@ export class TapGameScene {
       } else {
         this.playerPendingNextRound = !this.playerPendingNextRound;
         if (this.playerPendingNextRound) {
-          this.cashoutButton.showNextRoundQueued(FIXED_BET);
-          this.setButtonLabel(`QUEUED $${FIXED_BET}\nTAP TO CANCEL`, 0x88ccff);
+          this.cashoutButton.showNextRoundQueued(ENTRY_FEE);
+          this.setButtonLabel(`QUEUED $${ENTRY_FEE}\nTAP TO CANCEL`, 0x88ccff);
         } else {
-          this.cashoutButton.showNextRoundMode(FIXED_BET);
-          this.setButtonLabel(`BET NEXT $${FIXED_BET}`, 0x88aadd);
+          this.cashoutButton.showNextRoundMode(ENTRY_FEE);
+          this.setButtonLabel(`BET NEXT $${ENTRY_FEE}`, 0x88aadd);
         }
       }
     }

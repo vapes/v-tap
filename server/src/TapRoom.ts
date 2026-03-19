@@ -72,7 +72,7 @@ export class TapRoom {
     const player = this.players.get(playerId);
     if (!player || this.roundPlayers.has(playerId)) return false;
 
-    const bet = config.tap.fixedBet;
+    const bet = config.tap.entryFee;
     if (player.balance < bet) return false;
 
     player.balance -= bet;
@@ -89,12 +89,13 @@ export class TapRoom {
     if (this.phase !== 'RUNNING') return false;
     const rp = this.roundPlayers.get(playerId);
     if (!rp) return false;
-    if (rp.tapCount >= config.tap.maxTaps) return false;
+
+    if (rp.lastTapTime >= 0 && this.elapsed - rp.lastTapTime < config.tap.tapCooldownSec) return false;
 
     if (rp.tapCount > 0) {
-      if (rp.player.balance < config.tap.fixedBet) return false;
-      rp.player.balance -= config.tap.fixedBet;
-      this.pot += config.tap.fixedBet;
+      if (rp.player.balance < config.tap.tapCost) return false;
+      rp.player.balance -= config.tap.tapCost;
+      this.pot += config.tap.tapCost;
       rp.player.send({ type: 'balanceUpdate', balance: rp.player.balance });
     }
 

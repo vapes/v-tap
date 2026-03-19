@@ -124,10 +124,11 @@ export class BotManager {
   }
 
   private scheduleTapActions() {
+    const cooldownMs = config.tap.tapCooldownSec * 1000;
     for (const bot of this.tapBots) {
-      const numTaps = 1 + Math.floor(Math.random() * 3);
+      const numTaps = 1 + Math.floor(Math.random() * 5);
       for (let i = 0; i < numTaps; i++) {
-        const delay = 500 + Math.random() * 12000 + i * 2500;
+        const delay = 500 + Math.random() * 12000 + i * (cooldownMs + 200 + Math.random() * 2000);
         this.tapTimeouts.push(
           setTimeout(() => this.tapRoom.tap(bot.id), delay),
         );
