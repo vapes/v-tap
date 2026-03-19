@@ -95,6 +95,6 @@ function handleMessage(player: Player, msg: ClientMessage) {
 }
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
-server.listen(PORT, () => {
-  console.log(`Last Tap server listening on :${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Last Tap server listening on 0.0.0.0:${PORT}`);
 });
